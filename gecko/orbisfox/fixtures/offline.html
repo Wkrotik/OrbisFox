@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OrbisFox — Gecko browser fixture</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 100%; min-height: 100%; }
+  html { overflow: auto; }
+  #scroll-fixture { width: 1700px; min-height: 800px; margin-top: 28px;
+    padding: 28px; border: 2px solid #42526d; border-radius: 16px;
+    background: linear-gradient(#192840, #273b5a); }
+  #scroll-end { margin-top: 600px; color: #facc15; }
+  body { padding: 32px; background: #101828; color: #f1f5ff;
+         font: 20px/1.5 "Noto Sans", sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  h1 { margin: 0; font-size: 36px; }
+  #status { padding: 8px 20px; border-radius: 20px; background: #3b455c; }
+  #layout-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+                 margin-top: 24px; }
+  article { min-width: 0; height: 300px; border: 2px solid #42526d;
+            border-radius: 16px; padding: 24px; background: #192840; }
+  h2 { margin-top: 0; font-size: 25px; }
+  #gradient { height: 80px; border-radius: 12px;
+              background: linear-gradient(90deg, #f97316, #facc15, #22c55e); }
+  #flex-row { display: flex; gap: 12px; margin-top: 20px; }
+  #flex-row > span { flex: 1; padding: 10px; text-align: center;
+                    border: 1px solid #7b8ca7; border-radius: 8px; }
+  #dom-result { font: 18px/1.6 monospace; white-space: pre-wrap; }
+  #controls { display: flex; align-items: center; gap: 24px; margin-top: 20px; }
+  button { border: 1px solid #fb923c; border-radius: 10px; padding: 10px 22px;
+           color: #fff; background: #9a3412; font: inherit; cursor: pointer; }
+  button:hover { background: #c2410c; }
+  #text-controls { margin-top: 12px; font-size: 17px; }
+  #page-text { padding: 7px; width: 340px; font: inherit; border: 2px solid #fb923c; border-radius: 8px; }
+  #scope { color: #a8b6d0; margin-top: 16px; font-size: 18px; }
+  #network-status { color: #93c5fd; font-size: 18px; }
+  #gradient { animation: pulse 2s ease-in-out infinite alternate; }
+  @keyframes pulse { from { opacity: .65; } to { opacity: 1; } }
+  body[data-result="pass"] #status { background: #166534; }
+  body[data-result="fail"] #status { background: #991b1b; }
+</style>
+<header><h1>OrbisFox · Gecko browser</h1><span id="status">Waiting for layout</span></header>
+<main id="layout-grid">
+  <article id="css-card"><h2>Real HTML + CSS layout</h2>
+    <div id="gradient"></div>
+    <div id="flex-row"><span>Grid</span><span>Flex</span><span>SWGL target</span></div>
+  </article>
+  <article id="script-card"><h2>DOM + JavaScript checks</h2><div id="dom-result"></div></article>
+</main>
+<div id="controls"><button id="click-control">DOM clicks: 0</button><span>Left stick / touch: cursor · Right stick: scroll · Cross: click · Triangle: reload</span></div>
+<div id="text-controls"><label for="page-text">Page typing test: </label><input id="page-text" type="text" maxlength="512" placeholder="Cross here to open keyboard"/><span id="text-result"> No text input yet</span></div>
+<p id="scope">Trusted file/LAN fixture. HTTPS, general websites and production security are not certified.</p>
+<p id="network-status">LAN HTTP / native DNS: pending after 8/8 checks. HTTPS NOT TESTED.</p>
+<section id="scroll-fixture"><h2>Right-stick scrolling</h2>
+  <p>Push down/up for vertical scrolling; right/left for horizontal scrolling.</p>
+  <p id="scroll-position">Actual page position: 0, 0</p>
+  <p id="scroll-end">Bottom of scroll fixture · push the right stick up to return</p>
+</section>
+<script>
+"use strict";
+window.orbisfoxScroll = {x: 0, y: 0, events: 0};
+addEventListener("scroll", () => {
+  window.orbisfoxScroll = {x: scrollX, y: scrollY, events: window.orbisfoxScroll.events + 1};
+  document.getElementById("scroll-position").textContent = `Actual page position: ${scrollX}, ${scrollY}`;
+}, {passive: true});
+document.getElementById("page-text").addEventListener("input", event => {
+  document.getElementById("text-result").textContent = ` Real input event: ${event.target.value.length} characters`;
+});
+window.orbisfoxClicks = 0;
+window.orbisfoxProgress = { stage: "script entered", passed: 0, checks: 0 };
+document.getElementById("click-control").addEventListener("click", event => {
+  event.currentTarget.textContent = `DOM clicks: ${++window.orbisfoxClicks}`;
+});
+(async () => {
+  const results = [];
+  const update = stage => {
+    window.orbisfoxProgress = { stage, passed: results.filter(result => result.ok).length,
+                               checks: results.length };
+  };
+  const check = (name, ok) => { results.push({ name, ok: !!ok }); update("DOM checks"); };
+  const close = (a, b) => Math.abs(a - b) < 1;
+  try {
+    check("DOM lookup", document.querySelectorAll("article").length === 2);
+    check("BigInt", (2n ** 63n).toString() === "9223372036854775808");
+    check("Promise checkpoint", await Promise.resolve(42) === 42);
+    let eventValue = 0;
+    const card = document.getElementById("script-card");
+    card.addEventListener("fixture", e => { eventValue = e.detail; }, { once: true });
+    card.dispatchEvent(new CustomEvent("fixture", { detail: 17 }));
+    check("DOM event", eventValue === 17);
+    update("waiting for animation frame");
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    update("animation frame received");
+    const grid = document.getElementById("layout-grid");
+    const first = document.getElementById("css-card").getBoundingClientRect();
+    const second = card.getBoundingClientRect();
+    check("CSS grid", getComputedStyle(grid).display === "grid" &&
+          close(first.width, second.width) && close(second.left - first.right, 24));
+    check("Box sizing", close(first.height, 300) &&
+          getComputedStyle(card).boxSizing === "border-box");
+    const cells = [...document.querySelectorAll("#flex-row > span")]
+                    .map(cell => cell.getBoundingClientRect());
+    check("CSS flex", cells.length === 3 && cells[0].width > 0 &&
+          close(cells[0].width, cells[2].width) &&
+          close(cells[1].left - cells[0].right, 12));
+    check("CSS gradient", getComputedStyle(document.getElementById("gradient"))
+          .backgroundImage.includes("linear-gradient"));
+  } catch (error) {
+    results.push({ name: String(error), ok: false });
+  }
+  const passed = results.filter(result => result.ok).length;
+  const ok = results.length === 8 && passed === 8;
+  document.getElementById("dom-result").textContent = results
+    .map(result => `${result.ok ? "PASS" : "FAIL"}  ${result.name}`).join("\n");
+  document.getElementById("status").textContent = `${passed}/${results.length} checks`;
+  document.body.dataset.result = ok ? "pass" : "fail";
+  document.title = `OrbisFox fixture ${ok ? "PASS" : "FAIL"} ${passed}/${results.length}`;
+  window.orbisfoxFixture = { ok, passed, results, width: innerWidth, height: innerHeight };
+  update("complete");
+})();
+</script>
+</html>

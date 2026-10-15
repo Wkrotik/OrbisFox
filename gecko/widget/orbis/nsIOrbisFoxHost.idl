@@ -1,0 +1,40 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+#include "nsISupports.idl"
+interface nsIWindowlessBrowser;
+
+/* Trusted native bring-up controller, never injected into web documents. */
+[scriptable, uuid(e8b42773-b7ac-43aa-9b74-95e82d6d0673)]
+interface nsIOrbisFoxHost : nsISupports {
+  nsIWindowlessBrowser createBrowser(in unsigned long width, in unsigned long height);
+  nsIWindowlessBrowser createChromeBrowser(in unsigned long width, in unsigned long height);
+  void sendEscape();
+  void setPointerInputEnabled(in boolean enabled);
+  void setCursorSpeed(in double multiplier);
+  readonly attribute boolean diagnosticsEnabled;
+  void setDiagnosticsEnabled(in boolean enabled);
+  void setNativeChromeState(in AUTF8String state);
+  AUTF8String takeNativeChromeAction();
+  void requestExit();
+  boolean openAddressKeyboard(in AString draft);
+  boolean openTextKeyboard(in AString draft);
+  readonly attribute unsigned long keyboardConfirmButton;
+  void cancelAddressKeyboard();
+  readonly attribute unsigned long keyboardStatus;
+  readonly attribute AString keyboardText;
+  readonly attribute long scrollX;
+  readonly attribute long scrollY;
+  boolean pumpFrame();
+  void closeBrowser();
+  void fixtureCheckpoint(in unsigned long passedAssertions);
+  void log(in AUTF8String message);
+  readonly attribute long cursorX;
+  readonly attribute long cursorY;
+  readonly attribute unsigned long buttons;
+  readonly attribute unsigned long long framesPresented;
+  readonly attribute boolean softwareWebRender;
+  readonly attribute boolean nativeNetworkReady;
+  readonly attribute boolean nativeJitReady;
+  readonly attribute boolean nativeAudioReady;
+};

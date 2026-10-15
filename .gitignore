@@ -1,0 +1,58 @@
+# Downloaded upstream source, SDKs and toolchains (never vendor local copies).
+/.deps/
+# All binaries, packages, build trees, reports, source snapshots and captures.
+/build/
+/dist/
+/release/
+# Local agent configuration can contain machine-specific endpoints/credentials.
+/.pi/
+/.env
+/.env.*
+!/.env.example
+
+# Interpreter/compiler/editor artifacts.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.pkg
+*.elf
+*.oelf
+*.bin
+*.tar
+*.tar.gz
+*.tar.xz
+*.tar.zst
+*.zip
+*.part
+*.downloading
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+/.idea/
+/.vscode/
+
+# Console evidence and personal browsing data are never public source.
+*.log
+*.sorbisdmp
+*.orbisdmpmanifest
+*.orbisstate
+core
+core.*
+recordingvideo-crash*.mp4
+prefs.js
+cookies.sqlite*
+places.sqlite*
+*.key
+*.p12
+*.pfx

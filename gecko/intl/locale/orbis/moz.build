@@ -1,0 +1,4 @@
+# Orbis has no validated OS locale/date-preference service yet.
+SOURCES += ["OSPreferences_orbis.cpp"]
+FINAL_LIBRARY = "xul"
+LOCAL_INCLUDES += [".."]

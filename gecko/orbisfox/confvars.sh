@@ -1,0 +1,4 @@
+MOZ_APP_BASENAME=OrbisFox
+MOZ_APP_NAME=orbisfox
+MOZ_APP_DISPLAYNAME=OrbisFox
+MOZ_BRANDING_DIRECTORY=orbisfox/branding
