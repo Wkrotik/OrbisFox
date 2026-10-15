@@ -34,9 +34,10 @@ bool id(const char* text,size_t length){if(!length||length>=32)return false;for(
 bool field(const char*& p,char* out,size_t capacity){const char* end=strchr(p,'|');if(!end)return false;size_t n=size_t(end-p);if(n>=capacity)return false;memcpy(out,p,n);out[n]=0;p=end+1;return true;}
 bool integer(const char*& p,int& result,char delimiter){if(!*p)return false;char* end=nullptr;const long value=strtol(p,&end,10);if(end==p||*end!=delimiter||value<0||value>4096)return false;result=int(value);p=end+1;return true;}
 bool contains(const ChromeControl& c,int x,int y){return x>=c.x&&x<c.x+c.width&&y>=c.y&&y<c.y+c.height;}
-constexpr int menuX=900,menuY=105,menuWidth=365,rowHeight=42,menuRows=10,menuPadding=8,zoomRow=6;
-constexpr const char* menuLabels[]={"New Tab","Home","Fullscreen","Bookmarks","History","Find in Page","","Close Current Tab","Settings","Quit"};
-constexpr int menuCommands[]={8,4,30,32,33,38,41,35,34,36};
+constexpr int menuX=900,menuY=105,menuWidth=365,rowHeight=42,menuRows=11,menuPadding=8,zoomRow=7;
+constexpr const char* menuLabels[]={"New Tab","Home","Fullscreen","Bookmarks","History","Recently Closed Tabs","Find in Page","","Close Current Tab","Settings","Quit"};
+constexpr int menuCommands[]={8,4,30,32,33,37,38,41,35,34,36};
+static_assert(sizeof(menuLabels)/sizeof(*menuLabels)==menuRows&&sizeof(menuCommands)/sizeof(*menuCommands)==menuRows,"menu rows");
 }
 bool prepare_native_chrome_font(const char* path){
 #ifdef ORBISFOX_FULL_GECKO
@@ -64,7 +65,7 @@ bool parse_chrome_scene(const char* wire,ChromeScene& result){
   ChromeControl c{};int enabled=0;
   if(!integer(p,c.command,',')||!integer(p,c.x,',')||!integer(p,c.y,',')||!integer(p,c.width,',')||!integer(p,c.height,',')||!integer(p,enabled,';'))return false;
   if(c.command<1||c.command>46||enabled>1||c.x+c.width>1280||c.y+c.height>720||!c.width||!c.height)return false;
-  if(!((c.command>=1&&c.command<=8)||(c.command>=10&&c.command<=12)||(c.command>=20&&c.command<=22)||(c.command>=43&&c.command<=46)))return false;
+  if(!((c.command>=1&&c.command<=9)||(c.command>=10&&c.command<=12)||(c.command>=20&&c.command<=22)||(c.command>=43&&c.command<=46)))return false;
   if(c.command<43 ? c.y+c.height>104 : c.y<650)return false;
   for(unsigned i=0;i<next.count;++i)if(next.controls[i].command==c.command)return false;
   c.enabled=enabled;next.controls[next.count++]=c;
@@ -134,7 +135,7 @@ void NativeChrome::render(Surface surface){
  if(*desired)for(unsigned i=0;i<scene.count;++i){const auto& c=scene.controls[i];if(c.command>=10&&c.command<=12&&!strcmp(scene.tabs[c.command-10],desired))fill_rect(surface,c.x,c.y+c.height-4,c.width,4,{255,150,60,255});}
  if(menu){
   fill_rect(surface,menuX-2,menuY-2,menuWidth+4,menuRows*rowHeight+menuPadding*2+4,{64,64,76,255});fill_rect(surface,menuX,menuY,menuWidth,menuRows*rowHeight+menuPadding*2,{43,42,51,255});
-  for(int i=0;i<menuRows;++i){int yy=menuY+menuPadding+i*rowHeight;bool selected=i==(hover>=0?hover:keyboard?int(focus):-1);if(selected)fill_rect(surface,menuX+8,yy,menuWidth-16,rowHeight-2,{66,65,77,255});if(i==1||i==8)fill_rect(surface,menuX+12,yy-2,menuWidth-24,1,{90,89,100,255});if(i==zoomRow){char zoom[12];snprintf(zoom,sizeof(zoom),"%u%%",scene.zoom);chromeText(surface,menuX+35,yy+9,"-",2,{251,251,254,255});chromeText(surface,menuX+menuWidth/2-22,yy+9,zoom,2,{251,251,254,255});chromeText(surface,menuX+menuWidth-45,yy+9,"+",2,{251,251,254,255});}else chromeText(surface,menuX+18,yy+9,menuLabels[i],2,{251,251,254,255});}
+  for(int i=0;i<menuRows;++i){int yy=menuY+menuPadding+i*rowHeight;bool selected=i==(hover>=0?hover:keyboard?int(focus):-1);if(selected)fill_rect(surface,menuX+8,yy,menuWidth-16,rowHeight-2,{66,65,77,255});if(i==1||i==9)fill_rect(surface,menuX+12,yy-2,menuWidth-24,1,{90,89,100,255});if(i==zoomRow){char zoom[12];snprintf(zoom,sizeof(zoom),"%u%%",scene.zoom);chromeText(surface,menuX+35,yy+9,"-",2,{251,251,254,255});chromeText(surface,menuX+menuWidth/2-22,yy+9,zoom,2,{251,251,254,255});chromeText(surface,menuX+menuWidth-45,yy+9,"+",2,{251,251,254,255});}else chromeText(surface,menuX+18,yy+9,menuLabels[i],2,{251,251,254,255});}
  }
  if(pending||*desired||overflow){fill_rect(surface,0,surface.height-32,485,32,{43,42,51,255});chromeText(surface,12,surface.height-27,overflow?"Command queue full - wait for Gecko":"Waiting for the page to respond...",2,{251,251,254,255});}
  (void)pressed;

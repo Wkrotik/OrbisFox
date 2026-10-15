@@ -25,6 +25,12 @@ tracking individual release results.
 - Real Gecko layout and JavaScript interpretation; HTTP/HTTPS through Gecko/NSS.
 - Controller pointer/scrolling, native PS4 IME, navigation, zoom and find-in-page.
 - Bookmarks, application history, recent sites and settings persisted in the profile.
+- Firefox-style address bar: plausible hosts navigate (localhost/IP literals over
+  HTTP), everything else searches; `@ddg`, `@wiki` and other one-off search keywords.
+- Recently closed tabs, per-entry history deletion, custom home page, optional
+  "open previous tabs at startup", Global Privacy Control and clearing cookies/site data.
+- Site identity indicator (lock / "Not Secure") with a site-information panel and
+  readable load-error messages instead of raw status codes.
 - Native pointer/chrome feedback on a separate worker; actual content and
   Gecko-backed UI still share the main thread.
 - Software H.264/AAC and VP8/VP9/Opus/Vorbis/FLAC/MP3 decoding and native AudioOut.
