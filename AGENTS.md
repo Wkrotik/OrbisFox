@@ -1,8 +1,8 @@
 # Agent guide — OrbisFox
 
 Applies to the whole repository. Read `README.md`, `CONTRIBUTING.md`,
-`docs/PORTING.md`, `docs/HARDWARE.md`, `LICENSES/README.md` and the current
-`SESSION_HANDOFF.md` before changing the project. This guide is for coding
+`docs/PORTING.md`, `docs/HARDWARE.md` and `LICENSES/README.md` before changing
+the project. Read a current `SESSION_HANDOFF.md` too if one is present locally. This guide is for coding
 agents; it does not authorize remote actions or override the operator.
 
 ## Current state and priorities

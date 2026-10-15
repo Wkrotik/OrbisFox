@@ -127,7 +127,7 @@ license/provenance entry for every new dependency. Preserve upstream headers.
 By submitting a patch, you confirm you have the right to contribute it under the
 applicable component license. No CLA or assignment is required. Do not submit
 proprietary SDK material, firmware binaries, shader binaries, private keys or
-unlicensed artwork. Add yourself to [CONTRIBUTORS.md](CONTRIBUTORS.md) if desired.
+unlicensed artwork. Contributions are recorded in Git history.
 
 ## Preparing an alpha
 

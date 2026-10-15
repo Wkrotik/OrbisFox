@@ -104,6 +104,8 @@ class SourceReleaseTests(unittest.TestCase):
             self.assertNotIn('0BSD', (ROOT / name).read_text(), name)
 
     def test_public_docs_links_and_license_scopes(self):
+        for removed in ('CONTRIBUTORS.md', 'agents.md', 'SESSION_HANDOFF.md'):
+            self.assertNotIn(removed, EXPORT.ROOT_FILES)
         for name in EXPORT.ROOT_FILES:
             self.assertTrue((ROOT / name).is_file(), name)
         for path in [ROOT / name for name in EXPORT.ROOT_FILES if name.endswith('.md')] + list((ROOT / 'docs').glob('*.md')):

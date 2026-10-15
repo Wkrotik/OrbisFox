@@ -133,8 +133,7 @@ Do not publish the maintainer's local console addresses, logs or dumps.
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md), [architecture](docs/PORTING.md),
 [hardware/evidence guidance](docs/HARDWARE.md) and [release gates](docs/RELEASING.md).
-Agents must also read [AGENTS.md](AGENTS.md). Contributors are acknowledged in
-[CONTRIBUTORS.md](CONTRIBUTORS.md).
+Agents must also read [AGENTS.md](AGENTS.md).
 
 High-impact work includes supported JIT/executable-memory integration, profiling
 and scheduling, native hardware video decoding, accelerated rendering, working
