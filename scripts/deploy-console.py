@@ -224,7 +224,7 @@ def main():
                 name = source.relative_to(ROOT)
                 preserve(source, attempt / 'sources' / name)
                 manifest.append({'path': str(name), 'sha256': sha256(source)})
-        for name in ('Makefile', 'SESSION_HANDOFF.md'):
+        for name in ('Makefile',):
             preserve(ROOT / name, attempt / 'sources' / name)
             manifest.append({'path': name, 'sha256': sha256(ROOT / name)})
         (attempt / 'source-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

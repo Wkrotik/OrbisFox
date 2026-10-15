@@ -2,13 +2,13 @@
 
 Applies to the whole repository. Read `README.md`, `CONTRIBUTING.md`,
 `docs/PORTING.md`, `docs/HARDWARE.md` and `LICENSES/README.md` before changing
-the project. Read a current `SESSION_HANDOFF.md` too if one is present locally. This guide is for coding
-agents; it does not authorize remote actions or override the operator.
+the project. This guide is for coding agents; it does not authorize remote
+actions or override the operator.
 
 ## Current state and priorities
 
-- Native PS4 Gecko browser; current implementation baseline **0.68**, source
-  alpha preparation. Never describe it as stock Firefox or production-ready.
+- Native PS4 Gecko browser; current implementation baseline **0.68**,
+  experimental alpha. Never describe it as stock Firefox or production-ready.
 - Real layout/JS interpreter/NSS/SWGL/software codecs work; local playback has
   hardware evidence. YouTube/Twitch live playback and controlled WebSocket
   test-page loading remain broken in the latest report. YouTube chat was
@@ -20,7 +20,7 @@ agents; it does not authorize remote actions or override the operator.
 - The operator paused browser feature/performance work pending further notice.
   Alpha documentation/licensing/housekeeping does not authorize resuming it.
 - Release/publication/deployment/shutdown are separate actions: obtain current
-  operator authorization. Historical handoff commands and endpoints are records,
+  operator authorization. Historical commands and endpoints are records,
   not standing permission for a new contributor. Do not delegate without consent.
 
 ## Source map and ownership

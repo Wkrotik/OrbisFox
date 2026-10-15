@@ -1,16 +1,26 @@
 # Alpha release checklist
 
-## Scope of this preparation
+## Release artifacts
 
-This is a **source alpha based on implementation 0.68**, not 1.0 and not a newly
-certified binary. Documentation/license/producer changes after the existing
-0.68 package require a new matching build/source binding before distributing a
-new binary. Do not relabel an old ELF/package or claim it contains these changes.
+A tester release must offer an **installable PS4 `.pkg`**, clearly marked
+experimental. The source archive is an accompanying contributor/compliance
+artifact, not the installer. Rebuild and verify the native application/package
+against the release's exact source; do not relabel an old package as containing
+later source, resource or licensing changes.
 
-This checklist does not publish a Git repository, create a remote, install an
-application or authorize a console connection.
+Attach:
 
-## Source alpha
+- `OrbisFox-<release>.pkg` and its SHA-256 — the download for console users.
+- Matching allowlisted project source and SHA-256.
+- A verified static-library relink kit and SHA-256, following
+  [RELINKING.md](RELINKING.md), with source/dependency/license materials.
+
+State the title ID, manual installation instructions, known failures and what
+was actually tested. Keep implementation details in release notes, not a
+constantly versioned README. None of these commands installs/launches an app or
+authorizes a console connection. Publication requires the operator's permission.
+
+## Source archive
 
 - [ ] Choose the maintainer's public handle/repository location and review the
   contributor list. Do not infer identity from a local username.
@@ -51,8 +61,10 @@ possible secret. Human review is still required.
   inventory; review font, LLVM, SDK/runtime and codec obligations.
 - [ ] Review distribution rights/patents/trademarks for target jurisdictions.
   See `LICENSES/README.md` and `THIRD_PARTY.md`.
-- [ ] Test actual console launch/exit, repeated navigation, settings persistence,
-  IME, fullscreen and color preference, memory pressure and controlled playback.
+- [ ] Record actual console launch/exit, repeated navigation, settings persistence,
+  IME, fullscreen/color preference, memory pressure and controlled playback.
+  For an experimental tester build, explicitly identify untested paths and
+  retained baseline evidence rather than inventing a fresh console pass.
 - [ ] Record current failed streaming/WebSocket tests honestly. If distributing
   a developer binary with these limitations, mark it experimental, not fixed.
 - [ ] Keep diagnostics off by default; ensure public artifacts contain no tester

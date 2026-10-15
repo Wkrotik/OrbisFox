@@ -177,8 +177,7 @@ class ConsoleWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(DEPLOY, 'ROOT', Path(directory)):
             root = Path(directory)
             self.candidate_files(root)
-            for name in ('Makefile', 'SESSION_HANDOFF.md'):
-                (root / name).write_text('fixture')
+            (root / 'Makefile').write_text('fixture')
             before = {'installers': ['unrelated.pkg', 'OrbisFox.pkg'], 'markers': {}}
             with patch.object(DEPLOY, 'console_state', side_effect=[before, before]), patch.object(DEPLOY, 'prepare_capture', return_value={'active': False}), patch.object(DEPLOY.subprocess, 'run') as run, patch('sys.argv', ['deploy', '--host', 'console.example.test']), contextlib.redirect_stdout(io.StringIO()):
                 run.return_value.returncode = 0
@@ -197,8 +196,7 @@ class ConsoleWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(DEPLOY, 'ROOT', Path(directory)):
             root = Path(directory)
             self.candidate_files(root)
-            for name in ('Makefile', 'SESSION_HANDOFF.md'):
-                (root / name).write_text('fixture')
+            (root / 'Makefile').write_text('fixture')
             with patch.object(DEPLOY, 'console_state', return_value={'installers': [], 'markers': {}}), patch.object(DEPLOY, 'prepare_capture', return_value={'active': False}), patch.object(DEPLOY.subprocess, 'run') as run, patch('sys.argv', ['deploy', '--host', 'console.example.test']), contextlib.redirect_stdout(io.StringIO()):
                 run.return_value.returncode = 1
                 self.assertEqual(DEPLOY.main(), 1)

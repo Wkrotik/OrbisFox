@@ -1,7 +1,7 @@
 # Contributing to OrbisFox
 
-Thanks for helping an early native browser port become useful. This is a source
-alpha, not desktop Firefox with a different build switch. Read the limitations
+Thanks for helping an early native browser port become useful. This is an
+experimental alpha, not desktop Firefox with a different build switch. Read the limitations
 in [README.md](README.md) before proposing compatibility or performance claims.
 
 ## First setup
@@ -133,6 +133,8 @@ unlicensed artwork. Contributions are recorded in Git history.
 
 Run `make source-release` to build a reproducible, allowlisted source archive
 with an embedded per-file SHA-256 manifest and a read-back verification report.
-It is a source artifact, **not** complete corresponding source for every linked
-binary dependency. Follow [docs/RELEASING.md](docs/RELEASING.md) before publishing.
-No automated command in this preparation publishes a repository or release.
+It is a source artifact, **not** the installable package or a substitute for
+matching dependency/relink materials. Tester releases must also provide the
+verified `.pkg` and relink kit. Follow [docs/RELEASING.md](docs/RELEASING.md) and
+[docs/RELINKING.md](docs/RELINKING.md) before publishing. Build/export commands
+do not publish a repository or release.

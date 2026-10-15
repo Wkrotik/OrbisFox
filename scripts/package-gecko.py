@@ -176,6 +176,7 @@ def main():
         'llvm-libcxxabi-license.txt': ROOT / '.deps/llvm-runtimes/libcxxabi/LICENSE.TXT',
         'llvm-libunwind-license.txt': ROOT / '.deps/llvm-runtimes/libunwind/LICENSE.TXT',
         'stb-truetype-MIT.txt': ROOT / 'assets/licenses/stb-truetype-MIT.txt',
+        'musl-COPYRIGHT.txt': ROOT / 'assets/licenses/musl-COPYRIGHT.txt',
         'ffmpeg-LGPL-2.1.txt': ROOT / '.deps/ffmpeg-9.0.2/COPYING.LGPLv2.1',
         'noto-OFL.txt': ENGINE / 'offline-assets/licenses/noto-OFL.txt',
         'noto-emoji-OFL.txt': ENGINE / 'offline-assets/licenses/noto-emoji-OFL.txt',

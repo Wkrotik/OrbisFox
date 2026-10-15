@@ -37,8 +37,11 @@ No upstream artwork is reused.
 
 The SDK runtime includes the [OpenOrbis musl fork](https://github.com/OpenOrbis/musl)
 and associated runtime/stub components. musl's MIT and other retained notices
-must accompany distribution where applicable. The public SDK root's GPL text
-is not a substitute for component notices or exact corresponding source.
+must accompany distribution where applicable. `assets/licenses/musl-COPYRIGHT.txt`
+preserves the fork's notice inventory from commit
+`2b0bb8ce2fa64ac255cb656785729d159a5f074c`; this notice reference is not a claim
+that the SDK's compiled libc was rebuilt from that later commit. The public SDK
+root's GPL text is not a substitute for component notices or corresponding source.
 
 ## Host-only tools and fixtures
 
@@ -61,8 +64,12 @@ resources as well as the dependency source notices when packaging.
 The native package producer stages project/license-scope notices, Mozilla's
 pointer, LLVM notices, stb, OFL and LGPL texts. It also stages the exact added
 FFmpeg source archive, configuration, build report and builder script.
-This alone is **not** a complete GPL/LGPL corresponding-source/relinking audit.
-Follow [the redistribution checklist](LICENSES/README.md#before-distributing-binaries).
+An installer release must additionally attach its matching project source and
+verified application relink kit, with exact dependency pins and build materials.
+See [relinking instructions](docs/RELINKING.md) and the
+[redistribution checklist](LICENSES/README.md#before-distributing-binaries).
+Engineering verification is not patent/trademark clearance or a blanket legal
+certification of third-party material.
 
 Only public SDK inputs are used for the build. Firmware services are resolved
 on-console; their binaries and proprietary SDK documentation are not included.
