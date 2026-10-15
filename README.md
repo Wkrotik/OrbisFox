@@ -6,17 +6,18 @@ OrbisFox runs real Gecko HTML/CSS layout, SpiderMonkey JavaScript, NSS networkin
 Software WebRender and software audio/video decoding on PS4. It is not a wrapper
 around the system browser, a remote-rendering client or a reskinned diagnostic UI.
 
-## Alpha status — help wanted, not 1.0
+## Project status
 
-The current implementation baseline is **0.68**. This repository is being
-prepared as a **source alpha for developers and testers**. It is not a polished
-or production-hardened browser. This documentation/licensing update does not
-reissue the existing 0.68 package as a newly validated public binary.
+OrbisFox is an **early alpha for developers and testers**, not a polished or
+production-hardened browser. Heavy sites can be very slow, and streaming and
+web-application compatibility are incomplete. Substantial platform work remains
+before it can be a reliable everyday browser.
 
-**Heavy sites can be painfully slow. YouTube and Twitch livestreams remain
-broken in the latest reported tests. Do not choose this alpha expecting a
-reliable movie/TV streaming app or browser-game platform.** Contributions are
-welcome precisely because substantial platform work remains.
+See [Releases](https://github.com/Wkrotik/OrbisFox/releases) for published versions,
+downloads and build-specific testing notes, and
+[Issues](https://github.com/Wkrotik/OrbisFox/issues) for known bugs and planned
+work. This README covers the project, architecture and basic usage rather than
+tracking individual release results.
 
 ### Working and implemented
 
@@ -31,8 +32,7 @@ welcome precisely because substantial platform work remains.
   on-console. Site compatibility is a separate matter.
 - Noto Latin, symbols, math and color-emoji fallback fonts; not complete CJK coverage.
 - Opt-in diagnostics, off by default, with application-log cleanup in Settings.
-- Website light/dark/system preference and the site-fullscreen integration were
-  added in 0.68. They still need broader console/site validation.
+- Website light/dark/system preference and site-fullscreen integration.
 
 ### Important limits
 
@@ -42,10 +42,10 @@ welcome precisely because substantial platform work remains.
 | WebAssembly | Not supported by the current native backend. |
 | Graphics | CPU Software WebRender/SWGL plus VideoOut presentation; no accelerated page rendering, supported WebGL/WebGPU or hardware video decoder. |
 | Responsiveness | Multi-second main-thread stalls have been measured. A moving native cursor does not mean the page is responsive. |
-| Streaming | YouTube chat was reported working; YouTube/Twitch livestreams still stall. Local playback success does not establish remote-player compatibility. |
-| WebSockets | Gecko's implementation is present. The controlled console test page still failed to open, so end-to-end console verification remains unresolved. |
+| Streaming | Live-stream compatibility is incomplete. Local playback does not establish remote-player, MediaSource/live or DRM compatibility. |
+| WebSockets | Gecko's implementation is present; API availability alone does not establish end-to-end console/site compatibility. |
 | Isolation | Content is in-process, with no desktop-style content sandbox. Chrome/web principal checks remain enforced, but are not process isolation. Avoid sensitive accounts and untrusted browsing. |
-| Compatibility | No DRM/CDM integration, extension platform or full desktop Firefox UI. No promise that services such as Netflix work. |
+| Compatibility | No DRM/CDM integration, extension platform or full desktop Firefox UI. Website support depends on the APIs and platform capabilities it requires. |
 
 ## Build on Linux
 
@@ -83,7 +83,7 @@ Primary browser artifacts:
 - `dist/gecko/orbisfox.elf` — matching native ELF for debugging.
 - `build/gecko-app/build-report.json` — native link and source-binding evidence.
 - `dist/gecko/build-report.json` and `build/gecko-app/extracted-payload-report.json` — package extraction/hash checks.
-- `build/releases/orbisfox-0.68-alpha-source.tar.gz` and `.sha256` — source export.
+- `build/releases/orbisfox-<version>-alpha-source.tar.gz` and `.sha256` — source export.
 
 The old `make pkg` and `make pkg-videoout` targets build **standalone bring-up
 lanes**, not the current full browser. Default `make` now selects `pkg-gecko`.
