@@ -3,6 +3,7 @@
 #define widget_orbis_OrbisCompositorWidget_h
 
 #include "mozilla/DataMutex.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/widget/HeadlessCompositorWidget.h"
 
@@ -35,6 +36,7 @@ class OrbisCompositorWidget final : public HeadlessCompositorWidget {
   // Compositor-thread-only state. The initial offline viewport is bounded.
   RefPtr<gfx::DrawTarget> mTarget;
   bool mDrawing = false;
+  TimeStamp mDrawStart;  // Compositor thread only; see OrbisCompositorTiming.
 };
 
 }  // namespace mozilla::widget

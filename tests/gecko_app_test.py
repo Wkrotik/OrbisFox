@@ -897,5 +897,44 @@ class GeckoAppTests(unittest.TestCase):
         self.assertIn("'html_rendered_on_console': False", script)
         self.assertIn("'website_security_certified': False", script)
 
+    def test_issue_1_2_3_console_evidence_hooks_are_opt_in_and_honest(self):
+        # Issue #1: survey only creates/closes; the anonymous trial is opt-in,
+        # crash-safe and reuses the real own-code gate (never RWX, no bypass).
+        jit = (ROOT / 'src/ps4/native_jit.cpp').read_text()
+        trial = (ROOT / 'include/orbisfox/jit_trial.h').read_text()
+        self.assertIn('survey_jit_create(', jit)
+        self.assertIn('create/close only, no mapping or execution', jit)
+        self.assertIn('decide_jit_trial(files)', jit)
+        self.assertIn('prepare_orbis_executable_memory(anonymous)', jit)
+        self.assertIn('PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON', jit)
+        self.assertNotIn('PROT_EXEC', jit)
+        self.assertLess(jit.index('decide_jit_trial(files)'), jit.index('survey_jit_create('), 'survey is opt-in')
+        self.assertLess(jit.index('decide_jit_trial(files)'), jit.index('prepare_orbis_executable_memory(anonymous)'))
+        # Evidence only: release the arena and restore the shared outcome
+        # before clearing the crash marker; a pass never enables JIT.
+        trialBlock = jit[jit.index('prepare_orbis_executable_memory(anonymous)'):]
+        self.assertLess(trialBlock.index('shutdown_orbis_executable_memory();record_orbis_jit_gate_outcome(shared);'), trialBlock.index('finish_jit_trial(files)'))
+        self.assertIn('return false;\n}', trialBlock)
+        self.assertIn('SpiderMonkey JIT not enabled, codegen unverified', jit)
+        self.assertIn('return munmap(address,bytes);', jit)
+        self.assertIn('/data/orbisfox/probe-anonymous-jit', trial)
+        self.assertIn('previousAttemptCrashed', trial)
+        self.assertIn('jit_trial_test', (ROOT / 'Makefile').read_text())
+        # Issue #2: compositor draw/flush/snapshot cost, observational only.
+        widget = (ROOT / 'gecko/widget/orbis/OrbisCompositorWidget.cpp').read_text()
+        self.assertIn('mDrawStart = TimeStamp::Now();', widget)
+        self.assertLess(widget.index('mTarget->Flush();'), widget.index('const TimeStamp flushEnd'))
+        self.assertIn('GetOrbisCompositorTiming()', widget)
+        main = (ROOT / 'gecko/orbisfox/native/main.cpp').read_text()
+        self.assertIn('compositor sample=%u frames=%llu', main)
+        self.assertIn('software raster, no GPU', main)
+        # Issue #3: decoder thread inputs and opt-in decoder modules.
+        self.assertIn('FFmpeg software decode threads (derived from Gecko policy', main)
+        self.assertIn('/data/orbisfox/verbose-media-log', main)
+        self.assertIn('FFmpegVideo:4,FFmpegAudio:3,MediaFormatReader:4,MediaDecoder:3', main)
+        self.assertLess(main.index('native_diagnostics_enabled() && mediaLogging'), main.index('setenv("MOZ_LOG", mozLog.c_str(), 1)'))
+        host = (ROOT / 'gecko/orbisfox/fixtures/browser-shell-host.js').read_text()
+        self.assertIn('parsed:media.mozParsedFrames??null', host)
+
 if __name__ == '__main__':
     unittest.main()

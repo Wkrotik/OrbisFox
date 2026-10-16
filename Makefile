@@ -102,6 +102,8 @@ test: build/swgl/libswgl-host.a
 	python3 scripts/test-orbis-blob-font.py
 	$(HOST_CXX) -std=c++20 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iinclude tests/jit_memory_probe_test.cpp -o build/jit_memory_probe_test
 	./build/jit_memory_probe_test
+	$(HOST_CXX) -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iinclude tests/jit_trial_test.cpp -o build/jit_trial_test
+	./build/jit_trial_test
 	$(HOST_CXX) -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -Iinclude tests/browser_controls_test.cpp -o build/browser_controls_test
 	./build/browser_controls_test
 	node tests/browser_shell_test.js

@@ -80,6 +80,10 @@ void release_orbis_executable_memory(void* address,size_t bytes){
 }
 void shutdown_orbis_executable_memory(){Lock lock;if(stats.claimed)uncertain();cleanup();}
 OrbisJitStats orbis_jit_memory_stats(){Lock lock;return stats;}
+void record_orbis_jit_gate_outcome(const OrbisJitStats& outcome){
+ Lock lock;if(arena)return;
+ stats=outcome;stats.ready=stats.claimed=false;stats.reservedBytes=stats.committedBytes=0;
+}
 const char* orbis_jit_gate_reason(const OrbisJitStats& state){
  if(state.ready)return "owned-code-verified";
  if(state.lastResult==-ENOSYS)return "native-api-unavailable";

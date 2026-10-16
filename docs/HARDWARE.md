@@ -88,3 +88,27 @@ python3 scripts/serve-browser-network.py --host <host-LAN-IP> --port 8767 --seco
 
 For regressions record URL, codec/resolution, ready state, actual frame/drop
 counts, cold/warm timing, diagnostics state and the run/package binding.
+
+## Performance evidence for issues #1–#3
+
+All of these are opt-in, need diagnostics on, and produce evidence only. None
+changes rendering, decoding or the JavaScript backend by default.
+
+- **#1 JIT:** create `/data/orbisfox/probe-anonymous-jit`. The next start
+  surveys which maximum protection `sceKernelJitCreateSharedMemory` refuses
+  (create/close only), then runs the existing own42/43 execution gate on an
+  anonymous `mmap` RW arena with RW/RX transitions (never RWX). The arena is
+  released afterwards and the interpreter is kept; a pass is not live JIT.
+  The outcome is written to `/data/orbisfox/probe-anonymous-jit.result` even with
+  diagnostics off. A fault during the trial leaves `.pending`; the next start
+  then withdraws the request instead of retrying.
+- **#2 software raster:** the heartbeat `compositor` line reports mean/max
+  SWGL draw, Flush and Snapshot+GetDataSurface time per published frame.
+- **#3 video decode:** startup logs the processor count and the decode thread
+  counts Gecko's FFmpeg policy derives from it per width tier. Media evidence
+  now includes Gecko's parsed/decoded/presented/painted frame counters and the
+  last frame delay. `/data/orbisfox/verbose-media-log` adds Debug-level
+  `FFmpegVideo`/`FFmpegAudio`/`MediaFormatReader`/`MediaDecoder` logs; it is
+  high volume, so use it only for short controlled reproductions.
+
+Record console model, firmware and the run/package binding with every result.

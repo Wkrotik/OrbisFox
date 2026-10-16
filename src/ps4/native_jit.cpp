@@ -1,13 +1,35 @@
 #ifdef ORBISFOX_FULL_GECKO
 #include "orbisfox/jit_memory_probe.h"
+#include "orbisfox/jit_trial.h"
 #include "orbisfox/module_binding.h"
 #include "orbisfox/presenter.h"
 #include "../../gecko/orbisfox/OrbisExecutableMemory.h"
 #include <orbis/libkernel.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
 namespace orbisfox {
 namespace {
+// Anonymous W^X trial arena (issue #1). mmap RW only; transitions go through
+// the same sceKernelMprotect/query gate as shared code. Never RWX.
+void* anonymousArena=nullptr;
+JitTrialFiles realTrialFiles(){
+  JitTrialFiles files;
+  files.exists=[](void*,const char* path){return access(path,F_OK)==0;};
+  files.createDurable=[](void*,const char* path){
+    const int fd=open(path,O_CREAT|O_WRONLY|O_TRUNC,0600);if(fd<0)return false;
+    const bool okay=write(fd,"1\n",2)==2&&fsync(fd)==0;return close(fd)==0&&okay;
+  };
+  files.remove=[](void*,const char* path){return unlink(path)==0||errno==ENOENT;};
+  return files;
+}
+void writeTrialResult(const char* line){
+  // Independent of the diagnostics flag: the tester asked for this trial.
+  FILE* file=fopen("/data/orbisfox/probe-anonymous-jit.result","w");
+  if(file){fputs(line,file);fputc('\n',file);fclose(file);}
+}
 using Create=int32_t(*)(int,size_t,int,int*);
 using Alias=int32_t(*)(int,int,int*);
 using Map=int32_t(*)(int,int,void**);
@@ -108,7 +130,53 @@ bool prepare_native_jit_memory() {
       ready?"PASS":"INTERPRETER FALLBACK",state.failedPhase,unsigned(state.lastResult),(unsigned long long)state.reservedBytes);
   log("Native JIT reason: %s; Wasm remains unavailable until executable code AND native signal/trap contracts are verified; no Wasm interpreter in this engine",
       orbis_jit_gate_reason(state));
-  return ready;
+  if(ready)return true;
+  // Issue #1 evidence, opt-in only (diagnostics stay off by default). The
+  // shared-code outcome above decides the backend; nothing below enables JIT.
+  const OrbisJitStats shared=state;
+  const auto files=realTrialFiles();const auto decision=decide_jit_trial(files);
+  if(decision!=JitTrialDecision::run){
+    if(decision!=JitTrialDecision::notRequested)log("Native anonymous W^X trial: %s (opt-in %s)",jit_trial_decision_name(decision),jitTrialRequest);
+    if(decision==JitTrialDecision::previousAttemptCrashed)
+      writeTrialResult("previous-attempt-did-not-return: executing own code from anonymous RX memory likely faulted; request withdrawn");
+    return false;
+  }
+  char surveyLine[160]="not run: shared-code API unavailable";
+  if(shared.lastResult!=-ENOSYS){
+    // Which maximum protection does the firmware refuse? One page each,
+    // created and closed; nothing is mapped, written or executed.
+    const auto survey=survey_jit_create(
+      [](void* p,size_t bytes,int protection,int* fd)->int32_t {
+        Guard<int> output(-1);const auto rc=static_cast<Functions*>(p)->create(0,bytes,protection,&output.value);
+        if(!output.intact())__builtin_trap();if(rc==0)*fd=output.value;return rc;
+      },
+      [](void*,int fd)->int32_t {return close(fd);},&compilerFunctions,jitNativePage);
+    snprintf(surveyLine,sizeof(surveyLine),"RWX=0x%x RX=0x%x RW=0x%x R=0x%x close-failures=%d",
+             unsigned(survey.rc[0]),unsigned(survey.rc[1]),unsigned(survey.rc[2]),unsigned(survey.rc[3]),survey.closeFailures);
+    log("Native JIT create survey: %s; create/close only, no mapping or execution",surveyLine);
+  }
+  log("Native anonymous W^X trial: running own42/43 gate; pending marker %s written first",jitTrialPending);
+  OrbisJitBackend anonymous=backend;anonymous.user=nullptr;
+  anonymous.create=[](void*,size_t bytes,int* fd)->int32_t {
+    void* mapped=mmap(nullptr,bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+    if(mapped==MAP_FAILED)return errno?-errno:-ENOMEM;
+    anonymousArena=mapped;*fd=0;return 0;
+  };
+  anonymous.map=[](void*,int,void** address)->int32_t {if(!anonymousArena)return -EINVAL;*address=anonymousArena;return 0;};
+  // Released with the same libc API that mapped it.
+  anonymous.unmap=[](void*,void* address,size_t bytes)->int32_t {anonymousArena=nullptr;return munmap(address,bytes);};
+  anonymous.close=[](void*,int)->int32_t {return 0;};
+  const bool passed=prepare_orbis_executable_memory(anonymous);const auto trial=orbis_jit_memory_stats();
+  // Evidence only: release the arena and restore the shared-code outcome
+  // before the crash marker is cleared, so no unverified JIT stays live.
+  shutdown_orbis_executable_memory();record_orbis_jit_gate_outcome(shared);
+  finish_jit_trial(files);
+  char line[400];
+  snprintf(line,sizeof(line),"anonymous-own-code-gate=%s phase=%u rc=0x%x reason=%s; shared-code phase=%u rc=0x%x; create-survey %s",
+           passed?"PASS":"FAIL",trial.failedPhase,unsigned(trial.lastResult),orbis_jit_gate_reason(trial),shared.failedPhase,unsigned(shared.lastResult),surveyLine);
+  writeTrialResult(line);
+  log("Native anonymous W^X trial: %s; evidence only: arena released, SpiderMonkey JIT not enabled, codegen unverified, interpreter kept",line);
+  return false;
 }
 }
 #endif

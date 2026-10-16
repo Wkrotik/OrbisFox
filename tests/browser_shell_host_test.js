@@ -55,7 +55,7 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
   context.load=path=>vm.runInContext(fs.readFileSync('gecko/orbisfox/fixtures/'+path.split('/').at(-1),'utf8'),context);
   const tm={spinEventLoopUntil(name,done){
     for(let i=0;i<ticks&&!done();++i){if(i===delayWeb)host.nativeNetworkReady=true;tick();if(!actions)continue;
-      if(script){script(i,{actions,calls,elements,snapshots,win,uri,boolPrefs,get sessionPrefs(){return sessionPrefs;},get prefSaves(){return prefSaves;},get selected(){return selected;}});if(i===ticks-2)actions.exit();continue;}
+      if(script){script(i,{actions,calls,elements,snapshots,win,uri,boolPrefs,host,get sessionPrefs(){return sessionPrefs;},get prefSaves(){return prefSaves;},get selected(){return selected;}});if(i===ticks-2)actions.exit();continue;}
       if(i===0){if(tabFault){assert.equal(actions.newTab(),false);assert.equal(elements.size,1);}
         assert.equal(actions.navigate('chrome://global/'),false);assert.equal(actions.navigate('https://arbitrary.example/path'),profileOkay&&nativeReady&&!failLoad);
         if(settingsTest){
@@ -251,3 +251,16 @@ for(let cycle=0;cycle<4;++cycle){
 }
 setImmediate(()=>{assert.equal(clearResults.filter(ok=>ok===false).length,32,'failed flags are reported as failure');assert.equal(clearResults.filter(ok=>ok===true).length,36);
   console.log('Browser features: session save/bounds/rollback/shutdown/clear, gated/capped/non-destructive restore, lock evidence, title fallback, zoom defaults, reopen at cap, GPC root prefs, async clear-data');});
+// Issue #3: diagnostics media evidence carries Gecko's per-stage frame counters.
+const mediaRun=diagnostics=>run({script(i,t){
+  if(i!==0)return;t.host.diagnosticsEnabled=diagnostics;const e=t.elements.get('content'),web={DOMWindow:e.contentWindow};
+  const video={localName:'video',readyState:4,networkState:2,currentTime:1,paused:false,ended:false,error:null,videoWidth:640,videoHeight:360,addEventListener(){},
+    getVideoPlaybackQuality:()=>({totalVideoFrames:30,droppedVideoFrames:2}),mozParsedFrames:40,mozDecodedFrames:32,mozPresentedFrames:30,mozPaintedFrames:28,mozFrameDelay:0.05};
+  const audio={localName:'audio',readyState:4,networkState:2,currentTime:1,paused:false,ended:false,error:null,addEventListener(){}};
+  e.nav.document={documentURI:'https://media.example/',nodePrincipal:{isSystemPrincipal:false},title:'m',querySelectorAll:s=>s==='video,audio'?[video,audio]:[],defaultView:{}};
+  e.nav.listener.onStateChange(web,null,20,0);}});
+const evidence=mediaRun(true).calls.filter(c=>c[0]==='log'&&c[1].startsWith('Browser media evidence: ')).map(c=>JSON.parse(c[1].slice('Browser media evidence: '.length)));
+assert.deepEqual([evidence[0].parsed,evidence[0].decoded,evidence[0].presented,evidence[0].painted,evidence[0].lateSeconds],[40,32,30,28,0.05]);
+assert.deepEqual([evidence[1].type,evidence[1].parsed,evidence[1].painted],['audio',null,null],'audio elements report null stage counters');
+assert(!mediaRun(false).calls.some(c=>c[0]==='log'&&c[1].startsWith('Browser media evidence')),'same media page logs nothing while diagnostics are off');
+console.log('Media evidence: parsed/decoded/presented/painted/lateSeconds stage counters, diagnostics-gated');

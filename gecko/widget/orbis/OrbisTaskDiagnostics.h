@@ -21,5 +21,14 @@ class OrbisMainTaskSpan {
   ~OrbisMainTaskSpan();
 };
 OrbisTaskDiagnostics GetOrbisTaskDiagnostics();
+// Software compositor cost per published frame (issue #2), recorded on the
+// compositor thread by OrbisCompositorWidget. "draw" is the time between
+// handing SWGL the draw target and its EndRemoteDrawing (WebRender's software
+// raster/composite of that frame); "flush" and "snapshot" are the DrawTarget
+// Flush and Snapshot+GetDataSurface that follow. Observational only.
+struct OrbisCompositorTiming {
+  uint64_t frames=0,cancelled=0,drawMicros=0,maxDrawMicros=0,flushMicros=0,snapshotMicros=0,maxSnapshotMicros=0;
+};
+OrbisCompositorTiming GetOrbisCompositorTiming();
 }
 #endif

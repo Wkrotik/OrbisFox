@@ -66,6 +66,14 @@ int main(){
  release_orbis_executable_memory(base,jitArenaBytes);assert(!f.maps&&!f.files&&!orbis_jit_memory_stats().ready);
  // A repeated startup is independent and does not retain old mappings/fds.
  assert(prepare_orbis_executable_memory(adapter(f)));shutdown_orbis_executable_memory();assert(!f.maps&&!f.files);
+ // Evidence-only trial: restoring the deciding (denied) outcome is ignored
+ // while an arena exists and never marks the backend ready or reserved.
+ OrbisJitStats denied{};denied.failedPhase=1;denied.lastResult=int32_t(0x80020001u);denied.ready=true;denied.reservedBytes=7;
+ assert(prepare_orbis_executable_memory(adapter(f)));record_orbis_jit_gate_outcome(denied);assert(orbis_jit_memory_stats().ready);
+ shutdown_orbis_executable_memory();record_orbis_jit_gate_outcome(denied);
+ const auto restored=orbis_jit_memory_stats();
+ assert(!restored.ready&&!restored.claimed&&restored.failedPhase==1&&uint32_t(restored.lastResult)==0x80020001u&&!restored.reservedBytes);
+ assert(!strcmp(orbis_jit_gate_reason(restored),"shared-code-permission-denied"));assert(!reserve_orbis_executable_memory(jitArenaBytes));
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

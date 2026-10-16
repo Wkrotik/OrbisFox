@@ -22,6 +22,10 @@ void release_orbis_executable_memory(void* address,size_t bytes);
 bool protect_orbis_executable_memory(void* address,size_t bytes,int protection);
 void shutdown_orbis_executable_memory();
 OrbisJitStats orbis_jit_memory_stats();
+// After an evidence-only trial released its arena, restore the outcome that
+// decided the backend (the shared-code gate) so reports describe it. Ignored
+// while an arena exists; never marks the backend ready.
+void record_orbis_jit_gate_outcome(const OrbisJitStats& outcome);
 const char* orbis_jit_gate_reason(const OrbisJitStats& state);
 }
 #endif

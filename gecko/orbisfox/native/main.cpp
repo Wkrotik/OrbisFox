@@ -130,6 +130,13 @@ void* monitor(void* opaque) {
     fprintf(output,"main-task sample=%u depth=%u active-age-us=%llu events=%llu long-events=%llu last-us=%llu max-inclusive-us=%llu last-long-name=%s detail-us=%llu detail-name=%s\n",
       sample,tasks.depth,(unsigned long long)(tasks.activeStart&&taskNow>=tasks.activeStart?taskNow-tasks.activeStart:0),
       (unsigned long long)tasks.events,(unsigned long long)tasks.longEvents,(unsigned long long)tasks.lastMicros,(unsigned long long)tasks.maxMicros,tasks.lastLongName,(unsigned long long)tasks.lastDetailedMicros,tasks.lastDetailedName);
+    // Issue #2: software compositor cost per published frame (cumulative means).
+    const auto composite=mozilla::widget::GetOrbisCompositorTiming();
+    const unsigned long long compositeFrames=composite.frames?composite.frames:1;
+    fprintf(output,"compositor sample=%u frames=%llu cancelled=%llu draw-mean-us=%llu draw-max-us=%llu flush-mean-us=%llu snapshot-mean-us=%llu snapshot-max-us=%llu; software raster, no GPU\n",
+      sample,(unsigned long long)composite.frames,(unsigned long long)composite.cancelled,(unsigned long long)composite.drawMicros/compositeFrames,
+      (unsigned long long)composite.maxDrawMicros,(unsigned long long)composite.flushMicros/compositeFrames,(unsigned long long)composite.snapshotMicros/compositeFrames,
+      (unsigned long long)composite.maxSnapshotMicros);
     const auto glyphs=orbisfox::missing_glyph_stats();
     if(glyphs.draws!=lastMissingGlyphDraws){
       fprintf(output,"missing-glyph sample=%u draws=%llu codepoints-first64=",sample,(unsigned long long)glyphs.draws);
@@ -347,10 +354,16 @@ int main() {
     return EXIT_FAILURE;
   }
   const bool verboseLogging = access("/data/orbisfox/verbose-gecko-log", F_OK) == 0;
-  setenv("MOZ_LOG", !native_diagnostics_enabled() ? "" : verboseLogging ?
+  // Issue #3: decoder/demuxer stages, separately opt-in so network captures
+  // stay small. Gecko's own modules; nothing is decoded differently.
+  const bool mediaLogging = access("/data/orbisfox/verbose-media-log", F_OK) == 0;
+  std::string mozLog = !native_diagnostics_enabled() ? "" : verboseLogging ?
       "timestamp,sync,SharedMemory:5,nsStreamPump:5,nsThreadPool:5,DocumentChannel:5,nsRedirect:5,ProcessIsolation:5,ScriptLoader:5,nsSocketTransport:5,nsHostResolver:5,nsHttp:3,mozStorage:5,cookie:5,userfonts:4" :
-      "timestamp,nsHostResolver:3,nsHttp:2,mozStorage:2,cookie:2,userfonts:4", 1);
-  log("Gecko detailed logging: %s; native lifecycle/security/failure logs retained", verboseLogging ? "verbose synchronous opt-in" : "bounded lower-volume buffered default");
+      "timestamp,nsHostResolver:3,nsHttp:2,mozStorage:2,cookie:2,userfonts:4";
+  if (native_diagnostics_enabled() && mediaLogging) mozLog += ",FFmpegVideo:4,FFmpegAudio:3,MediaFormatReader:4,MediaDecoder:3";
+  setenv("MOZ_LOG", mozLog.c_str(), 1);
+  log("Gecko detailed logging: %s%s; native lifecycle/security/failure logs retained", verboseLogging ? "verbose synchronous opt-in" : "bounded lower-volume buffered default",
+      native_diagnostics_enabled() && mediaLogging ? " + media decoder modules (opt-in verbose-media-log; Debug level, high volume: short controlled reproductions only)" : "");
   setenv("ORBISFOX_LOG_DIR",orbisfox::native_run_log_directory(),1);
   // Runtime diagnostics owns the log sink through LogModule::SetLogFile.
   // An environment override would prevent changing/closing it in Settings.
@@ -380,6 +393,18 @@ int main() {
   log("Gecko XPConnect native initialization begin; pthread gate=%s", diagnostics.threads);
   log("Native CPU affinity: available=%d; SDK-compatible sysconf configured=%ld online=%ld; actual native query, no fixed CPU count",
       native_available_processor_count(), sysconf(_SC_NPROCESSORS_CONF), sysconf(_SC_NPROCESSORS_ONLN));
+  {
+    // Issue #3: Gecko's FFmpegVideoDecoder at the pinned revision (83cebcf5,
+    // dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp InitCodecContext) never
+    // logs its choice: threads = max(min(widthTier, PR_GetNumberOfProcessors()-1), 1)
+    // with widthTier 1 (<320 px), 2 (<1024), 4 (<2048), 8; low-latency streams
+    // set slice threading only. PR_GetNumberOfProcessors reaches the wrapped
+    // sysconf (build-gecko-app.py audit), which answers CONF and ONLN alike.
+    const long processors = sysconf(_SC_NPROCESSORS_CONF);
+    const auto threads = [processors](long tier) { const long cap = processors - 1; return tier < cap ? tier : (cap > 1 ? cap : 1); };
+    log("FFmpeg software decode threads (derived from Gecko policy, processors=%ld): <320px=%ld 320-1023px=%ld 1024-2047px=%ld >=2048px=%ld; low-latency streams use slice threading only",
+        processors, threads(1), threads(2), threads(4), threads(8));
+  }
   const bool rustReady = probe_rust_runtime();
   log("Full-Gecko Rust ABI/allocation gate: %s", rustReady ? "PASS" : "FAIL");
   const bool filesystemReady = probe_native_filesystem_metadata();

@@ -327,7 +327,11 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
           host.log("Browser media evidence: "+JSON.stringify({tab:tab.id,index,reason,type:media.localName,
             ready:media.readyState,network:media.networkState,time:media.currentTime,paused:media.paused,ended:media.ended,
             error:media.error?.code??null,width:media.videoWidth,height:media.videoHeight,
-            frames:quality?.totalVideoFrames,dropped:quality?.droppedVideoFrames}));
+            frames:quality?.totalVideoFrames,dropped:quality?.droppedVideoFrames,
+            // Gecko's per-stage counters (issue #3): demuxed -> decoded ->
+            // presented -> painted. A gap shows which stage falls behind.
+            parsed:media.mozParsedFrames??null,decoded:media.mozDecodedFrames??null,presented:media.mozPresentedFrames??null,
+            painted:media.mozPaintedFrames??null,lateSeconds:media.mozFrameDelay??null}));
         }catch(error){host.log("Browser media evidence unavailable: "+String(error).slice(0,160));}};
         reportMedia("document-stop");
         for(const event of ["loadedmetadata","play","pause","playing","waiting","stalled","ended","error"])
