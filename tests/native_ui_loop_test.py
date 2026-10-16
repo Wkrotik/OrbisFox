@@ -89,5 +89,78 @@ int main(){
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+    def test_wheel_uses_consumer_clock_not_worker_batch_size(self):
+        compiler = shutil.which('clang++')
+        if not compiler:
+            self.skipTest('clang++ unavailable')
+        source = r'''
+#include "orbisfox/native_ui_loop.h"
+#include <cassert>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+using namespace orbisfox;
+struct Device {
+ std::mutex mutex;std::condition_variable cv;
+ uint64_t clock=1000000;unsigned sleeps=0;bool wake=false,quit=false;
+ UiPadSample pad{};
+ Device(){pad.connected=true;pad.rightY=255;}
+ static bool poll(void* raw,UiPadSample& out){auto& d=*static_cast<Device*>(raw);std::lock_guard<std::mutex> lock(d.mutex);out=d.pad;return out.connected;}
+ static bool present(void*,const Surface&){return true;}
+ static uint64_t now(void* raw){auto& d=*static_cast<Device*>(raw);std::lock_guard<std::mutex> lock(d.mutex);return d.clock;}
+ static void sleep(void* raw,uint32_t){auto& d=*static_cast<Device*>(raw);std::unique_lock<std::mutex> lock(d.mutex);++d.sleeps;d.cv.notify_all();d.cv.wait(lock,[&]{return d.wake||d.quit;});d.wake=false;}
+ void wait(unsigned n){std::unique_lock<std::mutex> lock(mutex);assert(cv.wait_for(lock,std::chrono::seconds(2),[&]{return sleeps>=n;}));}
+ void worker(uint64_t elapsed){std::unique_lock<std::mutex> lock(mutex);const unsigned next=sleeps+1;clock+=elapsed;wake=true;cv.notify_all();assert(cv.wait_for(lock,std::chrono::seconds(2),[&]{return sleeps>=next;}));}
+ void consumer(uint64_t elapsed){std::lock_guard<std::mutex> lock(mutex);clock+=elapsed;}
+ void buttons(uint32_t value){std::lock_guard<std::mutex> lock(mutex);pad.buttons=value;}
+ void connect(bool value){std::lock_guard<std::mutex> lock(mutex);pad.connected=value;}
+ void finish(){std::lock_guard<std::mutex> lock(mutex);quit=true;cv.notify_all();}
+};
+int main(){
+ uint8_t pixels[96*64*4]{};Device d;NativeUiLoop loop;
+ assert(loop.start({pixels,96,64,96*4},1920,943,{&d,Device::poll,Device::present,Device::now,Device::sleep}));
+ d.wait(1);assert(loop.consumeInput().wheel.y==0);
+ int64_t carry=0;
+ for(unsigned frame=0;frame<40;++frame){
+  // Identical 33 ms consumer intervals, but alternating worker sample counts.
+  d.worker(16000);if(frame%2==0){d.worker(16000);d.consumer(1000);}else d.consumer(17000);
+  carry+=1512*33000;const int expected=int(carry/1000000);carry%=1000000;
+  const auto input=loop.consumeInput();assert(input.wheel.x==0&&input.wheel.y==expected);
+ }
+ // No old-motion replay after a stalled producer or consumer.
+ d.consumer(65000);assert(loop.consumeInput().wheel.y==0);
+ d.worker(16000);assert(loop.consumeInput().wheel.y==0);
+ d.worker(33000);assert(loop.consumeInput().wheel.y==49);
+ d.worker(100000);assert(loop.consumeInput().wheel.y==0);
+ d.worker(33000);assert(loop.consumeInput().wheel.y==49);
+ // Paused IME, modal chrome, and disconnect reset the integrator.
+ loop.pauseInput(true);d.worker(16000);assert(loop.consumeInput().wheel.y==0);
+ loop.pauseInput(false);d.worker(16000);assert(loop.consumeInput().wheel.y==0);
+ d.worker(33000);assert(loop.consumeInput().wheel.y==49);
+ assert(loop.setChrome("1|0|1|content|content|||"));
+ d.buttons(8);d.worker(16000);auto menu=loop.consumeInput();assert(menu.chromeModal&&menu.wheel.y==0);
+ d.buttons(0);d.worker(16000);assert(loop.consumeInput().wheel.y==0);
+ d.buttons(8);d.worker(16000);assert(!loop.consumeInput().chromeModal);
+ d.buttons(0);d.worker(33000);assert(loop.consumeInput().wheel.y==49);
+ d.connect(false);d.worker(16000);assert(loop.consumeInput().wheel.y==0);
+ d.connect(true);d.worker(16000);assert(loop.consumeInput().wheel.y==0);
+ d.worker(33000);assert(loop.consumeInput().wheel.y==49);
+ d.finish();loop.stop();
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / 'test.cpp').write_text(source)
+            binary = path / 'test'
+            built = subprocess.run([compiler, '-std=c++17', '-O1', '-Wall', '-Wextra', '-Werror',
+                                    '-fsanitize=address,undefined', '-pthread',
+                                    '-I' + str(ROOT / 'include'), str(path / 'test.cpp'),
+                                    str(ROOT / 'src/native_ui_loop.cpp'), str(ROOT / 'src/native_chrome.cpp'),
+                                    str(ROOT / 'src/touch_cursor.cpp'), str(ROOT / 'src/surface.cpp'),
+                                    '-o', str(binary)], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 if __name__ == '__main__':
     unittest.main()

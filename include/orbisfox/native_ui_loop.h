@@ -64,7 +64,7 @@ class NativeUiLoop {
   uint16_t touchX_=1920,touchY_=943;
   pthread_t thread_{};
   bool started_=false;
-  uint64_t lastConsumer_=0;
+  StickScroll consumerScroll_; // Main consumer only, under inputMutex_.
   std::atomic<bool> stop_{false},paused_{false},failed_{false};
   std::atomic<double> speed_{1.0};
   std::atomic<uint64_t> polls_{0},scanouts_{0},frameSerial_{0},scanoutMicros_{0},maxScanoutMicros_{0};
@@ -81,7 +81,7 @@ class NativeUiLoop {
   bool running() const {return started_;} // main-thread lifecycle only
   Surface beginFrame(); // main thread's exclusive normalized RGBA staging slot
   bool publishFrame();
-  UiInputSnapshot consumeInput(); // latest sample; bounded wheel backlog
+  UiInputSnapshot consumeInput(); // latest axes; consumer-clock pixel deltas, no wheel backlog
   void pauseInput(bool pause){paused_.store(pause);} // Also quiesce scanout for native IME.
   void setSpeed(double speed){speed_.store(speed);}
   UiLoopStats stats() const;

@@ -15,7 +15,8 @@ int main() {
       if(magnitude<18)assert(x==0);
       else assert(x==int64_t((magnitude-17)*(magnitude-17)/8)*(d<0?-16:16));
       const auto neutral=scroll.update(128,128,now+16000);assert(neutral.x==0&&neutral.y==0);
-      const auto stalled=scroll.update(255,0,now+10000000);assert(stalled.x<=64&&stalled.y>=-64);
+      const auto stalled=scroll.update(255,0,now+10000000);assert(stalled.x==0&&stalled.y==0);
+      const auto reversedClock=scroll.update(255,0,now);assert(reversedClock.x==0&&reversedClock.y==0);
       scroll.reset();const auto restart=scroll.update(0,255,now+20000000);assert(restart.x==0&&restart.y==0);
     }
     StickScroll a,b;a.update(255,128,1);b.update(128,255,1);
@@ -24,5 +25,9 @@ int main() {
     for(unsigned frame=1;frame<=200;++frame)f+=fast.update(255,255,1+frame*8000).x;
     for(unsigned frame=1;frame<=100;++frame)s+=slow.update(255,255,1+frame*16000).x;
     assert(f==s);
+    StickScroll thirty;thirty.update(255,0,1);int x=0,y=0;
+    for(unsigned frame=1;frame<=1000;++frame){const auto d=thirty.update(255,0,1+frame*33000);assert(d.x<=64&&d.y>=-64);x+=d.x;y+=d.y;}
+    assert(x==((127-17)*(127-17)/8)*33);
+    assert(y==-((128-17)*(128-17)/8)*33);
   }
 }

@@ -4,6 +4,7 @@ class NativeChromeTest(unittest.TestCase):
  def test_worker_menu_controls_and_bounded_commands(self):
   source=r'''
 #include "orbisfox/native_chrome.h"
+#include "orbisfox/browser_controls.h"
 #include <cassert>
 #include <cstring>
 #include <vector>
@@ -38,7 +39,16 @@ int main(){
  assert(!chrome.modal());
  chrome.input(2048,800,500);chrome.input(0,800,500);assert(chrome.take(out,sizeof(out))&&!strcmp(out,"2:"));
  chrome.input(4096,800,500);chrome.input(0,800,500);assert(chrome.take(out,sizeof(out))&&!strcmp(out,"1:"));
- chrome.input(16384,800,500);chrome.input(0,800,500);assert(chrome.take(out,sizeof(out))&&!strcmp(out,"38:"));
+ // SDK raw L3 (0x0002) must dispatch Find exactly once, never middle-click.
+ const auto l3=browser_buttons(0x0002,true),r3=browser_buttons(0x0004,true);
+ NativeChrome stickChrome;stickChrome.update(scene); // No pending tab switch.
+ assert(l3==16384&&r3==8192);
+ assert(stickChrome.input(l3,800,500)&l3);stickChrome.input(l3,800,500);stickChrome.input(0,800,500);
+ assert(stickChrome.take(out,sizeof(out))&&!strcmp(out,"38:"));assert(!stickChrome.take(out,sizeof(out)));
+ // SDK raw R3 is middle-click, not Find (and closes a hovered tab).
+ assert(!(stickChrome.input(r3,800,500)&r3));stickChrome.input(0,800,500);assert(!stickChrome.take(out,sizeof(out)));
+ assert(stickChrome.input(r3,310,10)&r3);stickChrome.input(0,310,10);
+ assert(stickChrome.take(out,sizeof(out))&&!strcmp(out,"21:content-1"));
  // Header changes between menu press/release must not cancel New Tab.
  chrome.input(8,950,120);chrome.input(0,950,120);chrome.input(1,950,123);
  ChromeScene changed=scene;changed.controls[1].width=150;chrome.update(changed);

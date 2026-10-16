@@ -2,7 +2,7 @@
 // Actual supervisor with explicit XPConnect/docshell/controller/editor doubles.
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const source=fs.readFileSync('gecko/orbisfox/fixtures/browser-shell-host.js','utf8');
-function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeReady=true,tabsTest=false,textTest=false,stale=false,scroll=false,tabFault=false,reenterTabs=false,bookmarksTest=false,historyTest=false,mediaTest=false,saveFails=false,settingsTest=false,cursorFails=false,initialSettings='{}',initialSession='[]',featuresTest=false,clearData=null,ticks=7,tlsState=null,secureUI=undefined,blankTitle=false,delayWeb=-1,siteDataFlag=false,script=null,cursorX=40,cursorY=150,pixelRatio=1,rect={left:0,top:104,width:1280,height:584}}={}) {
+function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeReady=true,tabsTest=false,textTest=false,stale=false,scroll=false,shellScroll=false,tabFault=false,reenterTabs=false,bookmarksTest=false,historyTest=false,mediaTest=false,saveFails=false,settingsTest=false,cursorFails=false,initialSettings='{}',initialSession='[]',featuresTest=false,clearData=null,ticks=7,tlsState=null,secureUI=undefined,blankTitle=false,delayWeb=-1,siteDataFlag=false,script=null,cursorX=40,cursorY=150,pixelRatio=1,rect={left:0,top:104,width:1280,height:584}}={}) {
   const calls=[],snapshots=[],elements=new Map();let tick,actions,exit=false,listenerCount=0,selected='content',editing=false;
   const Ci={nsIDOMWindowUtils:{WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE:1,WHEEL_EVENT_ASYNC_ENABLED:8},nsITimer:{TYPE_REPEATING_SLACK:1},
     nsIWebProgress:{NOTIFY_STATE_DOCUMENT:1,NOTIFY_LOCATION:2},nsIWebProgressListener:{STATE_IS_BROKEN:1,STATE_IS_SECURE:2,STATE_IS_DOCUMENT:4,STATE_START:8,STATE_STOP:16,LOCATION_CHANGE_SAME_DOCUMENT:32},nsIChannel:{},nsITransportSecurityInfo:{},
@@ -27,7 +27,7 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
   element('content');
   const ui={ready:true,bind(value){actions=value;calls.push(['bind']);},contentElement:()=>elements.get(selected),createContent(id,info){const e=element(id);e.openWindowInfo=info;if(tabFault)e.hasAttribute=name=>name==='remote';return e;},selectContent(id){selected=id;calls.push(['select',id]);},
     removeContent(id){elements.delete(id);calls.push(['remove',id]);},renderTabs(tabs,active){calls.push(['tabs',tabs.map(t=>t.id),active]);},isEditing:()=>editing,
-    canScroll:()=>!editing,pointerMoved(){},control(){},editText(value){editing=true;assert(actions.openTextKeyboard(value));calls.push(['edit-text',value]);},
+    canScroll:()=>!editing&&!shellScroll,scrollShell(...args){calls.push(['shell-wheel',...args]);},pointerMoved(){},control(){},editText(value){editing=true;assert(actions.openTextKeyboard(value));calls.push(['edit-text',value]);},
     finishAddressKeyboard(status,text){editing=false;calls.push(['keyboard-finish',status,text]);if(textTest)calls.push(['commit-result',actions.commitText(text)]);},
     update(state,diagnostic,gates){snapshots.push({state,gates});},destroy(){calls.push(['destroy']);}};
   const win={addEventListener(){},removeEventListener(){},devicePixelRatio:pixelRatio,document:{documentURI:'chrome://orbisfox/content/browser.xhtml',readyState:'complete',nodePrincipal:{isSystemPrincipal:principal}},wrappedJSObject:{OrbisFoxShell:ui}};
@@ -159,6 +159,9 @@ for(let cycle=0;cycle<32;++cycle){
   const good=run();assert(good.exit);assert(good.calls.some(c=>c[0]==='checkpoint'&&c[1]===8));
   assert(good.calls.some(c=>c[0]==='load'&&c[2]==='https://arbitrary.example/path'&&c[3]==='null'));
   const scroll=run({scroll:true});assert.deepEqual(scroll.calls.find(c=>c[0]==='wheel'),['wheel','content',40,46,4,-7,0,0,0,0,0,9]);
+  const shellScroll=run({scroll:true,shellScroll:true,pixelRatio:2});
+  assert.deepEqual(shellScroll.calls.find(c=>c[0]==='shell-wheel'),['shell-wheel',4,-7,20,75]);
+  assert(!shellScroll.calls.some(c=>c[0]==='wheel'),'modal shell scroll must not reach content');
   const movedScroll=run({scroll:true,cursorX:950,cursorY:470});assert.deepEqual(movedScroll.calls.find(c=>c[0]==='wheel').slice(2,4),[950,366]);
   const scaledScroll=run({scroll:true,cursorX:400,cursorY:500,pixelRatio:2,rect:{left:20,top:100,width:640,height:292}});
   assert.deepEqual(scaledScroll.calls.find(c=>c[0]==='wheel').slice(2,4),[360,300]);

@@ -18,7 +18,10 @@ class StickScroll {
 public:
   void reset() {last_=0;carryX_=carryY_=0;}
   ScrollDelta update(uint8_t x,uint8_t y,uint64_t now) {
-    const uint64_t elapsed=last_ && now>last_ ? (now-last_>32000?32000:now-last_) : 0;
+    if(last_&&(now<last_||now-last_>64000)){reset();last_=now;return {};}
+    // Allow a normal 30 Hz consumer interval without undercounting movement.
+    // The 40 ms cap keeps each axis below 64 pixels even at full deflection.
+    const uint64_t elapsed=last_ && now>last_ ? (now-last_>40000?40000:now-last_) : 0;
     last_=now;
     return {axis(x,elapsed,carryX_),axis(y,elapsed,carryY_)};
   }

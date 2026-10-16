@@ -65,6 +65,7 @@ struct NativeState {
   Controller controller;
   NativeUiLoop nativeUi;
   uint64_t lastInputSerial=0;
+  uint32_t lastStickButtons=0;unsigned stickButtonReports=0;
   UiPointerEdge pointerEdges[16]{};unsigned pointerCount=0,pointerNext=0;
   TouchCursor touch;
   TimedStickCursor stickX, stickY;
@@ -154,12 +155,23 @@ void* monitor(void* opaque) {
   return nullptr;
 }
 int clamp(int n, int a, int b) { return n < a ? a : n > b ? b : n; }
+void traceStickButtons(NativeState& state,uint32_t raw){
+  const uint32_t sticks=raw&0x0006;
+  if(sticks==state.lastStickButtons)return;
+  state.lastStickButtons=sticks;
+  if(native_diagnostics_enabled()&&state.stickButtonReports<16){
+    ++state.stickButtonReports;
+    log("Controller stick-click: raw=0x%x mapped=0x%x; SDK L3=0x2 R3=0x4; Find=0x4000 middle=0x2000",
+        unsigned(sticks),unsigned(browser_buttons(sticks,true)));
+  }
+}
 bool poll(void* opaque, int32_t* x, int32_t* y, uint32_t* buttons) {
   auto& state = *static_cast<NativeState*>(opaque);
   state.monitorStage.store(1); state.progress.fetch_add(1); state.pollCount.fetch_add(1);
   if(state.nativeUi.running()){
     if(state.nativeUi.stats().failed)return false;
     const auto input=state.nativeUi.consumeInput();
+    traceStickButtons(state,input.pad.connected?input.pad.buttons:0);
     state.pointerNext=0;state.pointerCount=input.edgeCount;for(unsigned i=0;i<input.edgeCount;++i)state.pointerEdges[i]=input.edges[i];
     state.x=input.x;state.y=input.y;state.scrollDelta={};*x=input.x;*y=input.y;*buttons=0;
     if(state.exitRequested||browser_exit_chord(input.pad.buttons,state.shellControls)){
@@ -183,6 +195,7 @@ bool poll(void* opaque, int32_t* x, int32_t* y, uint32_t* buttons) {
   *buttons = 0;
   state.scrollDelta = {};
   if (state.controller.poll(input)) {
+    traceStickButtons(state,input.buttons);
     if (browser_exit_chord(input.buttons, state.shellControls)) {
       state.exitRequested = true;
       return false;
@@ -219,6 +232,7 @@ bool poll(void* opaque, int32_t* x, int32_t* y, uint32_t* buttons) {
     state.y = clamp(state.y, 10, height - 11);
     *buttons = browser_buttons(input.buttons, state.shellControls);
   } else {
+    traceStickButtons(state,0);
     if(state.keyboardLaunch.pending())state.keyboardLaunch.tick(UINT32_MAX,sceKernelGetProcessTime(),
       [](const char16_t*,uint32_t,bool){return false;}); // Disconnected controller cannot authorize a launch.
     state.touch.reset();

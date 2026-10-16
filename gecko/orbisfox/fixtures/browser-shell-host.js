@@ -557,7 +557,8 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
         if(dx||dy)try{
           if(!Number.isInteger(dx)||!Number.isInteger(dy)||Math.abs(dx)>64||Math.abs(dy)>64)throw new Error("Invalid scroll delta");
           const chromeScale=chrome.docShell.domWindow.devicePixelRatio||1;
-          if(!ui.canScroll())ui.scrollShell?.(dx*24,dy*24,host.cursorX/chromeScale,host.cursorY/chromeScale);
+          // Native wheel deltas are already pixels, not 24-pixel lines.
+          if(!ui.canScroll())ui.scrollShell?.(dx,dy,host.cursorX/chromeScale,host.cursorY/chromeScale);
           else{
           const win=active.element.contentWindow;if(active.nav.document.nodePrincipal.isSystemPrincipal!==false)throw new Error("System scroll target rejected");
           const flags=Ci.nsIDOMWindowUtils.WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE|Ci.nsIDOMWindowUtils.WHEEL_EVENT_ASYNC_ENABLED;

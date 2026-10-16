@@ -41,7 +41,7 @@ bool NativeUiLoop::start(const Surface& initial,uint16_t touchX,uint16_t touchY,
   touchX_=touchX;touchY_=touchY;stop_.store(false);failed_.store(false);paused_.store(false);
   polls_.store(0);scanouts_.store(0);frameSerial_.store(0);scanoutMicros_.store(0);maxScanoutMicros_.store(0);
   x_.store(initial.width/2);y_.store(initial.height/2);
-  input_={};input_.x=initial.width/2;input_.y=initial.height/2;lastConsumer_=backend_.now(backend_.user);
+  input_={};input_.x=initial.width/2;input_.y=initial.height/2;consumerScroll_.reset();
   if(pthread_create(&thread_,nullptr,entry,this)){free(storage_);storage_=nullptr;output_={};return false;}
   started_=true;return true;
 }
@@ -52,34 +52,38 @@ void NativeUiLoop::stop(){
 Surface NativeUiLoop::beginFrame(){return started_?Surface{frames_.writer(),output_.width,output_.height,output_.stride}:Surface{};}
 bool NativeUiLoop::publishFrame(){if(!started_||failed_.load())return false;frames_.publish();return true;}
 UiInputSnapshot NativeUiLoop::consumeInput(){
-  Lock lock(inputMutex_);UiInputSnapshot result=input_;input_.wheel={};input_.edgeCount=0;
+  Lock lock(inputMutex_);UiInputSnapshot result=input_;input_.edgeCount=0;
   const uint64_t now=backend_.now(backend_.user);
   unsigned count=0;for(unsigned i=0;i<result.edgeCount;++i)if(now>=result.edges[i].stamp&&now-result.edges[i].stamp<=2000000)result.edges[count++]=result.edges[i];result.edgeCount=count;
-  // Scroll expires quickly; trusted pointer edges have a bounded2s lifetime.
-  if(now<result.stamp||now-result.stamp>64000)result.wheel={};
-  lastConsumer_=now;return result;
+  // Integrate the latest deflection at the consumer's clock. Summing worker
+  // samples here caused 2/3-sample steps and clipping as the two clocks drifted.
+  // Never replay motion after stalls, pause, modal chrome or disconnect.
+  result.wheel={};
+  if(!result.pad.connected||paused_.load()||result.chromeModal||now<result.stamp||now-result.stamp>64000)
+    consumerScroll_.reset();
+  else result.wheel=consumerScroll_.update(result.pad.rightX,result.pad.rightY,now);
+  return result;
 }
 UiLoopStats NativeUiLoop::stats()const{return{polls_.load(),scanouts_.load(),frameSerial_.load(),scanoutMicros_.load(),maxScanoutMicros_.load(),x_.load(),y_.load(),failed_.load()};}
 void* NativeUiLoop::entry(void* opaque){static_cast<NativeUiLoop*>(opaque)->run();return nullptr;}
 void NativeUiLoop::run(){
   TouchCursor touch;touch.set_resolution(touchX_,touchY_);TimedStickCursor stickX,stickY;
-  PointerPollClock clock;StickScroll scroll;double oldSpeed=speed_.load();
+  PointerPollClock clock;double oldSpeed=speed_.load();
   int x=output_.width/2,y=output_.height/2;uint64_t serial=0,inputSerial=0,lastPresented=UINT64_MAX;
   int lastX=-1,lastY=-1;bool lastPaused=false,primary=false,middle=false;uint64_t lastChrome=UINT64_MAX;
   while(!stop_.load()){
     const uint64_t begin=backend_.now(backend_.user);
     UiPadSample pad{};pad.connected=backend_.poll(backend_.user,pad);polls_.fetch_add(1);
-    const auto timing=clock.update(begin);ScrollDelta wheel{};
+    const auto timing=clock.update(begin);
     const double speed=speed_.load();
     if(timing.discontinuity||speed!=oldSpeed){touch.reset();stickX.reset();stickY.reset();oldSpeed=speed;}
     if(pad.connected&&!paused_.load()){
-      wheel=scroll.update(pad.rightX,pad.rightY,begin);
       x=clamp(x+stickX.update(pad.leftX,speed,timing.elapsed),10,output_.width-11);
       y=clamp(y+stickY.update(pad.leftY,speed,timing.elapsed),10,output_.height-11);
       if(stick_cursor_delta(pad.leftX)||stick_cursor_delta(pad.leftY))touch.reset();
       else touch.update(pad.contacts,pad.contactCount,output_.width,output_.height,x,y);
       x=clamp(x,10,output_.width-11);y=clamp(y,10,output_.height-11);
-    }else{touch.reset();stickX.reset();stickY.reset();clock.reset();scroll.reset();}
+    }else{touch.reset();stickX.reset();stickY.reset();clock.reset();}
     const uint32_t chromeMask=paused_.load()?0:chrome_.input(pad.connected?browser_buttons(pad.buttons,true):0,x,y);
     const bool chromeModal=chrome_.modal();
     {
@@ -90,10 +94,6 @@ void NativeUiLoop::run(){
       const bool down=pointer&&(contentButtons&1),middleDown=pointer&&(contentButtons&8192);
       if(down!=primary){if(input_.edgeCount==16)input_.edgeCount=0;input_.edges[input_.edgeCount++]={x,y,down,begin,1};primary=down;}
       if(middleDown!=middle){if(input_.edgeCount==16)input_.edgeCount=0;input_.edges[input_.edgeCount++]={x,y,middleDown,begin,8192};middle=middleDown;}
-      if(begin<lastConsumer_||begin-lastConsumer_>64000)input_.wheel={};
-      // At most roughly two normal samples; never replay a load-stall backlog.
-      input_.wheel.x=clamp(input_.wheel.x+wheel.x,-64,64);
-      input_.wheel.y=clamp(input_.wheel.y+wheel.y,-64,64);
       input_.pad=pad;input_.x=x;input_.y=y;input_.stamp=begin;input_.serial=++inputSerial;
     }
     x_.store(x);y_.store(y);
