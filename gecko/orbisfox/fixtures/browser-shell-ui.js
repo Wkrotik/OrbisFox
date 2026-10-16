@@ -18,7 +18,19 @@ function initializeOrbisFoxShell() {
   const contents=new Map([["content",$("content")]]), labels=new Map();
   let actions=null,focused=null,pointer=true,latest=null,nativeEditing=false;
   let editing="address",fullscreen=false,homeVisible=true,bookmarkSignature=null,historySignature=null,lastStatusMessage='',statusUntil=0;
-  let bookmarkItems=[],historyItems=[],libraryMode="bookmarks",libraryLimit=64,librarySignature=null,webReady=false,fullscreenNoticeUntil=0;
+  let bookmarkItems=[],historyItems=[],libraryMode="bookmarks",libraryLimit=64,librarySignature=null,webReady=false,fullscreenNoticeUntil=0,clearConfirmUntil=0,clearPendingSince=0;
+  // Local date/time like Firefox's Library; ISO fallback if Intl is absent.
+  // The console runtime may not know its time zone; label UTC explicitly then.
+  const visitTime=when=>{try{const utc=/^(?:Etc\/)?(?:UTC|GMT)$/.test(Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC");
+    return new Date(when).toLocaleString(undefined,{dateStyle:"medium",timeStyle:"short"})+(utc?" UTC":"");}catch(_error){return new Date(when).toISOString().slice(0,16).replace("T"," ")+" UTC";}};
+  // After a list rebuild or a control disabling itself, keep D-pad focus on
+  // the same control (or the nearest one) instead of jumping to the top.
+  const keepFocus=(scope,change)=>{
+    const prior=!pointer&&focused&&$(scope).contains(focused)?{control:focused.dataset.control,index:visibleControls().indexOf(focused)}:null;change();
+    if(!prior||pointer||($(scope).contains(focused)&&!focused.disabled))return;
+    const now=visibleControls();focus(now.find(e=>e.dataset.control===prior.control)||now[Math.max(0,Math.min(prior.index,now.length-1))]);
+  };
+  const SECURITY_LABELS={secure:"",broken:"Not fully secure",insecure:"Not Secure",local:"",'':""};
   const setFullscreen=enabled=>{
     if(!enabled){actions?.exitContentFullscreen?.();$("fullscreen-notice").hidePopover?.();$("fullscreen-notice").hidden=true;}
     fullscreen=enabled;document.body.setAttribute("data-fullscreen",String(enabled));
@@ -26,9 +38,9 @@ function initializeOrbisFoxShell() {
     $("fullscreen-button").textContent=enabled?"Exit fullscreen":"Fullscreen · Options to exit";
   };
   const empty=list=>{while(list.children.length)list.children[0].remove();};
-  const siteButton=(item,id)=>{
+  const siteButton=(item,id,activate=()=>{if(actions?.navigate(item.url))page();})=>{
     const button=document.createElement("button");button.appendChild(icon(item.url));const title=document.createElement('span');title.textContent=item.title||item.url;button.appendChild(title);button.title=item.url;button.dataset.control=id;button.disabled=!webReady;
-    button.addEventListener("click",()=>{if(actions?.navigate(item.url))page();});return button;
+    button.addEventListener("click",activate);return button;
   };
   const renderBookmarks=()=>{
     const revision=actions?.bookmarkRevision?.(),entries=revision===undefined?actions?.bookmarks?.()||[]:null;
@@ -48,24 +60,34 @@ function initializeOrbisFoxShell() {
       const row=document.createElement("div");row.className="bookmark-row";row.appendChild(siteButton(item,"recent-"+index));list.appendChild(row);
     }
   };
+  const rowButton=(label,control,handler,disabled=false)=>{const button=document.createElement("button");button.className="library-action";button.textContent=label;button.dataset.control=control;button.disabled=disabled;button.addEventListener("click",handler);return button;};
   const renderLibrary=()=>{
     if($("library-panel").hidden)return;
-    const signature=libraryMode+":"+libraryLimit+":"+String(bookmarkSignature)+":"+String(historySignature)+":"+webReady;
-    if(signature===librarySignature)return;librarySignature=signature;
-    const isHistory=libraryMode==="history",items=isHistory?historyItems:bookmarkItems;
-    text($("library-title"),isHistory?"Browsing history":"Bookmarks");
-    attribute($("library-history"),"aria-pressed",String(isHistory));attribute($("library-bookmarks"),"aria-pressed",String(!isHistory));
+    const closedRevision=actions?.closedTabsRevision?.()??-1;
+    const signature=libraryMode+":"+libraryLimit+":"+String(bookmarkSignature)+":"+String(historySignature)+":"+closedRevision+":"+webReady;
+    if(signature===librarySignature)return;librarySignature=signature;keepFocus("library-panel",()=>rebuildLibrary());
+  };
+  const rebuildLibrary=()=>{
+    const isHistory=libraryMode==="history",isClosed=libraryMode==="closed-tabs";
+    const items=isClosed?actions?.closedTabs?.()||[]:isHistory?historyItems:bookmarkItems;
+    text($("library-title"),isClosed?"Recently closed tabs":isHistory?"Browsing history":"Bookmarks");
+    attribute($("library-history"),"aria-pressed",String(isHistory));attribute($("library-bookmarks"),"aria-pressed",String(!isHistory&&!isClosed));attribute($("library-closed"),"aria-pressed",String(isClosed));
     $("clear-history").hidden=!isHistory;$("clear-history").disabled=!items.length||actions?.historyAvailable?.()===false;
-    text($("library-status"),items.length?(isHistory?items.length+" recently visited pages":"Saved websites"):
-      isHistory?(actions?.historyAvailable?.()===false?"History storage unavailable.":"No browsing history yet."):"No bookmarks yet. Use the star in the address bar.");
+    text($("library-status"),items.length?(isClosed?"Tabs closed in this session":isHistory?items.length+" recently visited pages":"Saved websites"):
+      isClosed?"No recently closed tabs.":isHistory?(actions?.historyAvailable?.()===false?"History storage unavailable.":"No browsing history yet."):"No bookmarks yet. Use the star in the address bar.");
     const list=$("library-list");empty(list);
     for(const [index,item] of items.slice(0,libraryLimit).entries()){
       const row=document.createElement("div");row.className="library-row";
-      const link=siteButton(item,"library-site-"+index);link.className="library-link";link.textContent="";
+      // A closed tab reopens (in a new tab when there is room) instead of
+      // replacing the current page.
+      const reopen=()=>{if(actions?.reopenClosedTab?.(index))page();else{librarySignature=null;renderLibrary();}};
+      const link=isClosed?siteButton(item,"library-site-"+index,reopen):siteButton(item,"library-site-"+index);link.className="library-link";link.textContent="";
       const title=document.createElement("span"),url=document.createElement("span");title.textContent=item.title||item.url;url.textContent=item.url;url.className="library-url";
       link.appendChild(icon(item.url));link.appendChild(title);link.appendChild(url);row.appendChild(link);
-      if(isHistory){const date=document.createElement("span");date.className="library-date";date.textContent=new Date(item.lastVisit).toISOString().slice(0,16).replace("T"," ")+" UTC";row.appendChild(date);}
-      else{const remove=document.createElement("button");remove.textContent="Remove";remove.dataset.control="library-remove-"+index;remove.addEventListener("click",()=>{actions?.removeBookmark?.(item.url);renderBookmarks();librarySignature=null;renderLibrary();});row.appendChild(remove);}
+      if(isClosed)row.appendChild(rowButton("Reopen","library-reopen-"+index,reopen,!webReady));
+      else if(isHistory){const date=document.createElement("span");date.className="library-date";date.textContent=visitTime(item.lastVisit);row.appendChild(date);
+        row.appendChild(rowButton("Delete","library-delete-"+index,()=>{actions?.removeHistory?.(item.url);renderHistory();librarySignature=null;renderLibrary();}));}
+      else row.appendChild(rowButton("Remove","library-remove-"+index,()=>{actions?.removeBookmark?.(item.url);renderBookmarks();librarySignature=null;renderLibrary();}));
       list.appendChild(row);
     }
     $("library-more").hidden=items.length<=libraryLimit;
@@ -84,7 +106,14 @@ function initializeOrbisFoxShell() {
   };
   const renderSettings=()=>{
     const settings=actions?.settings?.()||{searchEngine:"google",cursorSpeed:1};
-    for(const engine of ["google","duckduckgo","bing"])$("engine-"+engine).setAttribute("aria-pressed",String(settings.searchEngine===engine));
+    for(const engine of Object.keys(OrbisFoxShellModel.SEARCH_ENGINES))$("engine-"+engine)?.setAttribute("aria-pressed",String(settings.searchEngine===engine));
+    text($("home-page-value"),settings.homePage||"OrbisFox Home");$("home-default").disabled=!settings.homePage;
+    $("home-current").disabled=!/^https?:\/\//i.test(latest?.location||"")||latest.location===settings.homePage;
+    const toggle=(id,on,label)=>{attribute($(id),"aria-checked",String(on));text($(id),label+": "+(on?"On":"Off"));};
+    toggle("restore-session",settings.restoreSession===true,"Open previous tabs at startup");
+    toggle("gpc-toggle",settings.globalPrivacyControl===true,"Tell websites not to sell or share my data");
+    const confirming=Date.now()<clearConfirmUntil;attribute($("clear-site-data"),"data-confirm",String(confirming));
+    text($("clear-site-data"),confirming?"Press again to clear all cookies and site data":"Clear cookies and site data…");
     for(const scheme of ['system','light','dark'])attribute($('color-'+scheme),'aria-pressed',String((settings.colorScheme||'system')===scheme));
     $("cursor-speed").value=String(settings.cursorSpeed*100);$("cursor-speed-label").textContent=settings.cursorSpeed+"×";
     $("default-zoom").value=String(settings.defaultZoom||100);text($("default-zoom-label"),(settings.defaultZoom||100)+'%');
@@ -92,15 +121,29 @@ function initializeOrbisFoxShell() {
     attribute($('diagnostics-toggle'),'aria-checked',String(settings.diagnostics===true));
     text($('diagnostics-toggle'),'Save diagnostic logs: '+(settings.diagnostics===true?'On':'Off'));
   };
-  const saveSettings=changes=>{const saved=actions?.saveSettings?.(changes)===true;renderSettings();$("settings-status").textContent=saved?"Saved to your profile.":"Unable to save settings.";};
-  const panels=["menu-panel","diagnostic-panel","settings-panel","library-panel"];
-  const visibleControls=()=>[...document.querySelectorAll("[data-control]")].filter(e=>!e.disabled&&e.getClientRects().length&&
-    (!$("menu-panel").hidden?$("menu-panel").contains(e):
-      !$("diagnostic-panel").hidden?$("diagnostic-panel").contains(e):!$("settings-panel").hidden?$("settings-panel").contains(e):!$("library-panel").hidden?$("library-panel").contains(e):true));
+  const saveSettings=changes=>{let saved=false;keepFocus("settings-panel",()=>{saved=actions?.saveSettings?.(changes)===true;renderSettings();});$("settings-status").textContent=saved?"Saved to your profile.":"Unable to save settings.";};
+  const panels=["menu-panel","diagnostic-panel","settings-panel","library-panel","site-panel"];
+  // D-pad focus stays inside the topmost open panel.
+  const visibleControls=()=>{const open=panels.find(id=>!$(id).hidden);
+    return [...document.querySelectorAll("[data-control]")].filter(e=>!e.disabled&&e.getClientRects().length&&(!open||$(open).contains(e)));};
+  const renderSiteInfo=()=>{
+    const security=latest.security||"",location=latest.location;let host="OrbisFox Home";
+    if(location!==OrbisFoxShellModel.HOME)try{host=new URL(location).host||location;}catch(_error){host=location;}
+    text($("site-host"),host);attribute($("site-connection"),"data-security",security);
+    text($("site-connection"),security==="secure"?"Connection secure — information you send to this site is encrypted.":
+      security==="broken"?"Parts of this page are not secure (such as images or scripts).":
+      security==="insecure"?"Connection not secure — information you send could be read by others.":
+      location===OrbisFoxShellModel.HOME?"This is a built-in OrbisFox page.":"Connection details unavailable.");
+    text($("site-issuer"),security==="secure"&&latest.issuer?"Verified by: "+latest.issuer:"");
+  };
+  const showSiteInfo=()=>{
+    if(!latest)return;if(fullscreen)setFullscreen(false);closePanels();renderSiteInfo();
+    $("site-panel").hidden=false;attribute($("site-identity"),"aria-expanded","true");focus(visibleControls()[0]);
+  };
   const setPointer=enabled=>{pointer=enabled;actions?.pointer(enabled);$("focus-hint").textContent=enabled?
     "Cross click/type · R3 middle-click · Right stick scroll · Square address · L1/R1 tabs · R2/L2 back/forward · Circle Escape · Options menu":"D-pad focus · Cross activate · Circle page · Options + Circle exit";};
   const focus=e=>{focused?.removeAttribute("data-focused");focused=e;if(e){setPointer(false);e.setAttribute("data-focused","true");e.focus();}};
-  const closePanels=()=>{for(const id of panels)$(id).hidden=true;};
+  const closePanels=()=>{for(const id of panels)$(id).hidden=true;attribute($("site-identity"),"aria-expanded","false");clearConfirmUntil=0;};
   const page=()=>{closePanels();if(latest)$("address").value=latest.location===OrbisFoxShellModel.HOME?"":latest.location;focused?.removeAttribute("data-focused");focused=null;setPointer(true);api.contentElement().focus();};
   const keyboardHint=()=>actions?.keyboardConfirm?.()===2?"PS4 keyboard: Circle selects/confirms · Cross cancels":
     actions?.keyboardConfirm?.()===1?"PS4 keyboard: Cross selects/confirms · Circle cancels":"PS4 keyboard: follow the dialog's confirm/cancel labels";
@@ -122,7 +165,21 @@ function initializeOrbisFoxShell() {
     if(!actions||nativeEditing)return;
     if(name==="fullscreen"){closePanels();setFullscreen(!fullscreen);page();}
     else if(name==="bookmark"){actions.toggleBookmark?.();renderBookmarks();}
-    else if(name==="bookmarks"||name==="history")showLibrary(name);
+    else if(name==="bookmarks"||name==="history"||name==="closed-tabs")showLibrary(name);
+    else if(name==="site-info")showSiteInfo();
+    else if(name==="home-current"){if(/^https?:\/\//i.test(latest?.location||""))saveSettings({homePage:latest.location});}
+    else if(name==="home-default")saveSettings({homePage:""});
+    else if(name==="restore-session")saveSettings({restoreSession:actions.settings().restoreSession!==true});
+    else if(name==="gpc-toggle")saveSettings({globalPrivacyControl:actions.settings().globalPrivacyControl!==true});
+    else if(name==="clear-site-data"){
+      // Irreversible: require a second press within five seconds.
+      if(Date.now()>=clearConfirmUntil){clearConfirmUntil=Date.now()+5000;renderSettings();text($("settings-status"),"This signs you out of websites. Press again to confirm.");return;}
+      clearConfirmUntil=0;
+      clearPendingSince=Date.now();
+      const started=actions.clearSiteData?.(ok=>{clearPendingSince=0;renderSettings();text($("settings-status"),ok?"Cookies and site data cleared.":"Some site data could not be cleared.");})===true;
+      if(!started)clearPendingSince=0;
+      renderSettings();if(!started)text($("settings-status"),"Unable to clear site data in this build.");else if(!/cleared/.test($("settings-status").textContent))text($("settings-status"),"Clearing cookies and site data…");
+    }
     else if(name==="clear-history"){if(actions?.clearHistory?.()){libraryLimit=64;renderHistory();renderLibrary();}}
     else if(name==="library-more"){libraryLimit+=64;renderLibrary();}
     else if(name==='find')showFind();
@@ -157,7 +214,8 @@ function initializeOrbisFoxShell() {
   $("find-text").addEventListener('click',()=>command('find-edit'));
   $("find-text").addEventListener('input',()=>find());
   $("find-text").addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();find(!!event.shiftKey);}else if(event.key==='Escape'){event.preventDefault();closeFind();}});
-  document.addEventListener('mousedown',event=>{if(!$("menu-panel").hidden&&!$("menu-panel").contains(event.target)&&!$("menu-button").contains(event.target))page();});
+  document.addEventListener('mousedown',event=>{if(!$("menu-panel").hidden&&!$("menu-panel").contains(event.target)&&!$("menu-button").contains(event.target))page();
+    else if(!$("site-panel").hidden&&!$("site-panel").contains(event.target)&&!$("site-identity").contains(event.target))page();});
   $("cursor-speed").addEventListener("input",()=>{const value=Number($("cursor-speed").value);$("cursor-speed-label").textContent=(value/100)+"×";rangeVisual('cursor-speed',value);});
   $("cursor-speed").addEventListener("change",()=>saveSettings({cursorSpeed:Number($("cursor-speed").value)/100}));
   $("default-zoom").addEventListener("input",()=>{const value=Number($("default-zoom").value);text($("default-zoom-label"),value+'%');rangeVisual('default-zoom',value);});
@@ -227,7 +285,7 @@ function initializeOrbisFoxShell() {
       const add=(element,code)=>{if(!element?.getBoundingClientRect)return;const r=element.getBoundingClientRect();
         const x=Math.round(r.left),y=Math.round(r.top),w=Math.round(r.width),h=Math.round(r.height);
         if(!element.hidden&&element.getClientRects().length&&x>=0&&y>=0&&w>0&&h>0&&x+w<=1280&&(code>=43?y>=650&&y+h<=720:y+h<=104))controls.push([code,x,y,w,h,element.disabled?0:1].join(',')+';');};
-      if(!fullscreen){for(const [name,code] of [['back',1],['forward',2],['reload',3],['home',4],['address',5],['menu-button',6],['bookmark-button',7],['new-tab',8]])add($(name),code);
+      if(!fullscreen){for(const [name,code] of [['back',1],['forward',2],['reload',3],['home',4],['address',5],['menu-button',6],['bookmark-button',7],['new-tab',8],['site-identity',9]])add($(name),code);
         for(const [i,id] of ids.entries()){add(labels.get(id).button,10+i);add(labels.get(id).close,20+i);}}
       if(!$("find-bar").hidden)for(const [name,code] of [['find-text',43],['find-previous',44],['find-next',45],['find-close',46]])add($(name),code);
       return [2,fullscreen?1:0,webReady?1:0,selected,...Array.from({length:3},(_,i)=>ids[i]||''),actions.zoomValue?.()||100].join('|')+'|'+controls.join('');
@@ -239,7 +297,7 @@ function initializeOrbisFoxShell() {
       else if(code>=20&&code<=22||code===35){if(!contents.has(target))return false;actions.closeTab(target);page();}
       else if(code===1)actions.back();else if(code===2)actions.forward();else if(code===3)actions.reload();
       else if(code===4){actions.navigate('home');page();}else if(code===5)edit();else if(code===7)command('bookmark');else if(code===8){if(!actions.newTab())return false;page();}
-      else if(code>=30&&code<=34)command(['fullscreen','bookmark','bookmarks','history','settings'][code-30]);else if(code===36)command('exit');else if(code===38)command('find');else if(code===39)command('zoom-out');else if(code===40)command('zoom-in');else if(code===41)command('zoom-reset');else if(code===42)escape();else if(code>=43&&code<=46)command(['find-edit','find-previous','find-next','find-close'][code-43]);else return false;
+      else if(code>=30&&code<=34)command(['fullscreen','bookmark','bookmarks','history','settings'][code-30]);else if(code===36)command('exit');else if(code===37)command('closed-tabs');else if(code===9)command('site-info');else if(code===38)command('find');else if(code===39)command('zoom-out');else if(code===40)command('zoom-in');else if(code===41)command('zoom-reset');else if(code===42)escape();else if(code>=43&&code<=46)command(['find-edit','find-previous','find-next','find-close'][code-43]);else return false;
       return true;
     },
     canScroll(){return !homeVisible&&!nativeEditing&&panels.every(id=>$(id).hidden);},
@@ -282,11 +340,18 @@ function initializeOrbisFoxShell() {
       $("back").disabled=!state.canBack;$("forward").disabled=!state.canForward;
       if($("reload").dataset.busy!==String(!!state.busy))$("reload").dataset.busy=String(!!state.busy);$("reload").title=state.busy?"Stop":"Reload";attribute($("reload"),"aria-label",state.busy?"Stop":"Reload");
       if(!api.isEditing()&&document.activeElement!==$("address"))$("address").value=homeVisible?"":state.location;
-      text($("security"),homeVisible?"HOME":state.location.startsWith("file:")?"LOCAL":state.location.startsWith("https:")?"HTTPS":"HTTP");
+      // "" means unknown: no lock is claimed without Gecko/TLS evidence.
+      const security=homeVisible?"local":typeof state.security==="string"?state.security:state.location.startsWith("http:")?"insecure":state.location.startsWith("https:")?"":"local";
+      attribute($("site-identity"),"data-security",security);text($("security"),SECURITY_LABELS[security]??"");
+      attribute($("site-identity"),"aria-label",security==="secure"?"Secure connection — site information":security==="insecure"||security==="broken"?"Connection not secure — site information":"Site information");
       if(lastStatusMessage!==state.message){lastStatusMessage=state.message;if(/^(Found:|Not found:)/.test(state.message))statusUntil=Date.now()+3000;}
       if(!$("fullscreen-notice").hidden&&Date.now()>=fullscreenNoticeUntil){$("fullscreen-notice").hidePopover?.();$("fullscreen-notice").hidden=true;}
       $("browser-footer").hidden=fullscreen||!(state.busy||state.error||Date.now()<statusUntil);text($("status"),state.message);if($("status").dataset.error!==String(!!state.error))$("status").dataset.error=String(!!state.error);
       text($("diagnostic-text"),diagnostics);
+      if(clearConfirmUntil&&Date.now()>=clearConfirmUntil){clearConfirmUntil=0;if(!$("settings-panel").hidden){renderSettings();text($("settings-status"),"Changes are saved automatically.");}}
+      if(!$("site-panel").hidden)renderSiteInfo();
+      // Gecko reports only after every cleaner settles; never leave the user guessing.
+      if(clearPendingSince&&Date.now()-clearPendingSince>60000){clearPendingSince=0;text($("settings-status"),"Clearing is taking longer than expected. You can keep browsing.");}
     },
     destroy(){$("find-bar").hidden=true;setFullscreen(false);actions=null;nativeEditing=false;closePanels();focused=null;labels.clear();contents.clear();}
   });

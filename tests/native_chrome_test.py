@@ -14,7 +14,8 @@ int main(){
  assert(parse_chrome_scene(wire,scene));assert(scene.count==4&&scene.web);
  assert(parse_chrome_scene("2|0|1|content|content|||110|1,0,45,50,30,1;",other)&&other.zoom==110);
  assert(!parse_chrome_scene("2|0|1|content|content|||111|",other));
- for(const char* invalid:{"", "1|0|1|missing|content|||", "1|0|1|content|content|||1,0,0,1281,30,1;", "1|0|1|content|content|||1,0,0,30,105,1;", "1|0|1|content|content|||9,0,0,30,30,1;"})assert(!parse_chrome_scene(invalid,other));
+ for(const char* invalid:{"", "1|0|1|missing|content|||", "1|0|1|content|content|||1,0,0,1281,30,1;", "1|0|1|content|content|||1,0,0,30,105,1;", "1|0|1|content|content|||13,0,0,30,30,1;"})assert(!parse_chrome_scene(invalid,other));
+ assert(parse_chrome_scene("2|0|1|content|content|||100|9,250,60,40,36,1;",other)&&other.controls[0].command==9); // Site identity.
  NativeChrome chrome;chrome.update(scene);char out[48]{};
  // Disabled controls cannot dispatch. Native toolbar press+release is consumed.
  assert(chrome.input(1,20,60)&1);assert(chrome.input(0,20,60)&1);assert(!chrome.take(out,sizeof(out)));
@@ -23,10 +24,12 @@ int main(){
  // Menu opens, responds, and paints with no Gecko callbacks or new page frame.
  chrome.input(8,950,350);chrome.input(0,950,350);assert(chrome.modal());
  std::vector<uint8_t> pixels(1280*720*4);Surface surface{pixels.data(),1280,720,1280*4};chrome.render(surface);assert(pixels[(110*1280+905)*4]==43);
- chrome.input(1,950,113+8*42+10);chrome.input(0,950,113+8*42+10);assert(chrome.take(out,sizeof(out)));assert(!strcmp(out,"34:"));
+ chrome.input(1,950,113+9*42+10);chrome.input(0,950,113+9*42+10);assert(chrome.take(out,sizeof(out)));assert(!strcmp(out,"34:"));
+ // Recently closed tabs row.
+ chrome.input(8,950,350);chrome.input(0,950,350);chrome.input(1,950,113+5*42+10);chrome.input(0,950,113+5*42+10);assert(chrome.take(out,sizeof(out)));assert(!strcmp(out,"37:"));
  // Zoom left/right keeps menu open; keyboard Cross resets; outside click closes and is swallowed.
  chrome.input(8,950,120);chrome.input(0,950,120);
- for(int i=0;i<6;++i){chrome.input(256,950,120);chrome.input(0,950,120);}
+ for(int i=0;i<7;++i){chrome.input(256,950,120);chrome.input(0,950,120);}
  chrome.input(32,950,120);chrome.input(0,950,120);assert(chrome.take(out,sizeof(out))&&!strcmp(out,"39:"));
  chrome.input(64,950,120);chrome.input(0,950,120);assert(chrome.take(out,sizeof(out))&&!strcmp(out,"40:"));
  chrome.input(1,950,120);chrome.input(0,950,120);assert(chrome.take(out,sizeof(out))&&!strcmp(out,"41:"));

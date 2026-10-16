@@ -165,6 +165,8 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
   let keyboardPending=null,textTarget=null,scrollFailures=0,lastScroll="",scrollReports=0;
   let lastX=host.cursorX,lastY=host.cursorY,lastButtons=0,lastDiagnostics="",diagnosticText="",lastNativeScene="";
   const tabs=[],started=Date.now();let tabMutation=false,bookmarks=null,history=null,settings=null,settingsAvailable=false;
+  let closedTabs=null,lastSecurity=null,pendingSession=null,webWasReady=false,lastSession=null,sessionFailures=0;
+  const browserPrefs=()=>Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefService);
   // Remember identity, not the old document/window graph. WeakMap keys do not
   // keep previous pages alive after Gecko releases their history/cache owners.
   const documentIDs=new WeakMap(),resourcesObserved=new WeakSet();let documentSerial=0;
@@ -183,7 +185,11 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
       // Gecko's content-only override updates real prefers-color-scheme media
       // queries (including existing documents), without recoloring chrome or
       // injecting page CSS. Keep the profile transaction/rollback intact.
-      const apply=next=>{root.setIntPref("layout.css.prefers-color-scheme.content-override",{dark:0,light:1,system:2}[next.colorScheme]);host.setCursorSpeed(next.cursorSpeed);};
+      // Global Privacy Control sends Sec-GPC and navigator.globalPrivacyControl
+      // through Gecko's own implementation; nothing is injected into pages.
+      const apply=next=>{root.setIntPref("layout.css.prefers-color-scheme.content-override",{dark:0,light:1,system:2}[next.colorScheme]);
+        root.setBoolPref("privacy.globalprivacycontrol.enabled",next.globalPrivacyControl===true);
+        host.setCursorSpeed(next.cursorSpeed);};
       settings=new OrbisFoxShellModel.Settings(branch.getStringPref("settings","{}"),(serialized,next)=>{
         if(profile?.snapshot().ok!==true)throw Error("Settings require a persistent profile");
         const previous=branch.getStringPref("settings","{}"),oldSettings=settings.snapshot();
@@ -191,7 +197,37 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
         catch(error){branch.setStringPref("settings",previous);try{apply(oldSettings);savePreferences(service);}catch(_rollbackError){}throw error;}
       });
       apply(settings.snapshot());settingsAvailable=true;
+      if(settings.snapshot().restoreSession)pendingSession=OrbisFoxShellModel.sessionURLs(branch.getStringPref("session","[]"));
     }catch(error){host.log("Browser UI: settings unavailable: "+String(error).slice(0,160));}
+  };
+  // "Open previous tabs": persist open web tabs only while the option is on,
+  // and only once loads settle (not on every progress notification).
+  const saveSession=(force=false)=>{
+    if(!settingsAvailable||(!force&&sessionFailures>=4))return;
+    // A loading tab is saved by the address it is loading. Entries stay
+    // within the limits sessionURLs accepts so one long URL cannot void all.
+    const urls=[];if(settings.snapshot().restoreSession)for(const tab of tabs){
+      const url=tab.model.busy?tab.model.requested:tab.model.location;
+      if(/^https?:\/\//i.test(url)&&url.length<=2048&&!urls.includes(url)&&JSON.stringify([...urls,url]).length<=8192)urls.push(url);}
+    const serialized=JSON.stringify(urls);if(serialized===lastSession)return;
+    let service=null,branch=null,previous=null;
+    try{service=browserPrefs();branch=service.getBranch("orbisfox.browser.");previous=branch.getStringPref("session","[]");
+      branch.setStringPref("session",serialized);savePreferences(service);lastSession=serialized;}
+    catch(error){if(branch&&previous!==null)try{branch.setStringPref("session",previous);}catch(_){}
+      ++sessionFailures;host.log("Browser UI: session save failed: "+String(error).slice(0,160));}
+  };
+  const homeTarget=()=>{const page=settings.snapshot().homePage;return page&&gates().web?page:"home";};
+  // Web navigation opens only after the packaged Home fixture and trusted
+  // network/TLS probes pass. Restore tabs or the custom home page then.
+  const webBecameReady=()=>{
+    const first=tabs[0],untouched=first&&!first.closed&&first.model.requested===OrbisFoxShellModel.HOME&&!first.model.busy;
+    const urls=pendingSession||[];pendingSession=null;
+    if(urls.length){let opened=0;
+      for(const [index,url] of urls.entries()){
+        if(index===0&&untouched){if(load(url,first))++opened;}
+        else if(tabs.length<OrbisFoxShellModel.MAX_TABS&&tabAction(()=>newTab(url,null,true)))++opened;}
+      host.log("Browser UI: restored "+opened+" of "+urls.length+" previous web tabs");}
+    else if(untouched&&settings.snapshot().homePage)load(settings.snapshot().homePage,first);
   };
   const initializeBookmarks=()=>{
     try{
@@ -239,12 +275,23 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     if(uri.scheme!=="file"&&(!["http","https"].includes(uri.scheme)||!uri.host||uri.userPass))throw new Error("Invalid or privileged web URI");
     if(uri.scheme==="file"&&uri.spec!==OrbisFoxShellModel.HOME)throw new Error("Only packaged Home file is permitted");return uri;
   };
+  const siteName=spec=>{const match=/^https?:\/\/(\[[^\]/]+\]|[^/?#:]+)/i.exec(spec||"");return match?match[1].replace(/^www\./i,""):"";};
+  // Lock state from Gecko's own secure-browser UI when available; otherwise
+  // the verified TLS state recorded at document stop. Unknown stays "".
+  const pageSecurity=tab=>{
+    const location=tab.model.location;if(location===OrbisFoxShellModel.HOME||location.startsWith("file:"))return "local";
+    if(location.startsWith("http:"))return "insecure";if(!location.startsWith("https:"))return "";
+    try{const state=tab.element?.frameLoader?.browsingContext?.secureBrowserUI?.state,flags=Ci.nsIWebProgressListener;
+      if(Number.isInteger(state)){if(state&(flags.STATE_IS_BROKEN??1))return "broken";if(state&(flags.STATE_IS_SECURE??2))return "secure";if(state&(flags.STATE_IS_INSECURE??4))return "insecure";}}catch(_){}
+    const document=tab.nav?.document;
+    return tab.tlsSecure===true&&document?.nodePrincipal?.isSystemPrincipal===false&&/^https:\/\//i.test(document.documentURI||"")?"secure":"";
+  };
   const load=(text,tab=active,options={})=>action(()=>{
     if(!tab||tab.closed||!tab.nav)throw new Error("Content tab not ready");const uri=checkedURI(text);
     tab.beforeLoad=documentID(tab.nav.document);tab.reported=false;tab.model.begin(uri.spec);
     const principal=options.triggeringPrincipal?.isSystemPrincipal===false?options.triggeringPrincipal:
       uri.scheme==="file"?ssm.createContentPrincipal(uri,{}):ssm.createNullPrincipal({});
-    tab.nav.loadURI(uri,{...options,triggeringPrincipal:principal});
+    try{tab.nav.loadURI(uri,{...options,triggeringPrincipal:principal});}catch(error){tab.model.busy=false;throw error;}
     host.log("Browser UI: tab="+tab.id+" accepted content navigation "+uri.spec+"; completion not assumed");return true;
   });
   const observeNetworking=createOrbisPageNetworkObserver(host,(document,tab)=>document.defaultView?.top===tab.element.contentWindow);
@@ -304,14 +351,17 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     tab.listener={
       onStateChange(web,request,flags,status){
         if(tab.closed||web.DOMWindow!==e.contentWindow||!(flags&Ci.nsIWebProgressListener.STATE_IS_DOCUMENT))return;
-        if(flags&Ci.nsIWebProgressListener.STATE_START){tab.model.busy=true;tab.model.message="Loading…";}
+        if(flags&Ci.nsIWebProgressListener.STATE_START){tab.model.busy=true;tab.model.message="Loading…";tab.model.issuer="";tab.tlsSecure=false;}
         if(flags&Ci.nsIWebProgressListener.STATE_STOP){
-          tab.model.stopped(status);host.log("Browser UI: tab="+tab.id+" content document stop status=0x"+(status>>>0).toString(16));
+          tab.model.stopped(status,tab.nav?.document?.documentURI);host.log("Browser UI: tab="+tab.id+" content document stop status=0x"+(status>>>0).toString(16));
           reportPageResources(tab);
           if((status>>>0)===0)recordVisit(tab);
           if(request&&/^https:\/\//.test(tab.model.requested))try{
             const channel=request.QueryInterface(Ci.nsIChannel),info=channel.securityInfo;
             if(info){const tls=info.QueryInterface(Ci.nsITransportSecurityInfo);
+              // Identity details only from a verified connection for this document.
+              try{tab.tlsSecure=!!(tls.securityState&Ci.nsIWebProgressListener.STATE_IS_SECURE)&&(status>>>0)===0;const cert=tab.tlsSecure?tls.serverCert:null;
+                tab.model.issuer=String(cert?.issuerOrganization||cert?.issuerCommonName||"").slice(0,120);}catch(_){tab.tlsSecure=false;tab.model.issuer="";}
               host.log("Browser UI: actual HTTPS document evidence "+JSON.stringify({tab:tab.id,uri:channel.URI.spec,status:status>>>0,
                 secure:!!(tls.securityState&Ci.nsIWebProgressListener.STATE_IS_SECURE),errorCode:tls.errorCode,errorName:tls.errorCodeString,
                 protocol:tls.protocolVersion,chainLength:tls.succeededCertChain.length,builtinRoot:tls.isBuiltCertChainRootBuiltInRoot,serverCertificate:!!tls.serverCert}));}
@@ -328,6 +378,9 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     };
     tab.progress.addProgressListener(tab.listener,Ci.nsIWebProgress.NOTIFY_STATE_DOCUMENT|Ci.nsIWebProgress.NOTIFY_LOCATION);
     bc.isActive=tab===active;
+    // nsSecureBrowserUI is created lazily; create it before the first commit
+    // so its state is computed for this tab's documents.
+    try{void bc.secureBrowserUI;}catch(_){}
     host.log("Browser UI: tab="+tab.id+" genuine separate nonremote context bound");
     if(tab.pending!==null){const pending=tab.pending;tab.pending=null;load(pending,tab);}return true;
   };
@@ -353,7 +406,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
   const closeTab=(id=active?.id)=>action(()=>{
     if(ui.isEditing())throw new Error("Finish editing before closing a tab");if(tabs.length<=1)throw new Error("Keep one real tab; use Exit to close browser");
     const index=tabs.findIndex(t=>t.id===id);if(index<0)throw new Error("Unknown tab");const tab=tabs[index];
-    const selected=tab===active;tab.closed=true;tabs.splice(index,1);
+    const selected=tab===active;closedTabs.push(tab.model.location,tab.model.title);tab.closed=true;tabs.splice(index,1);
     if(selected)selectTab(tabs[Math.min(index,tabs.length-1)].id);
     dispose(tab);host.log("Browser UI: real tab closed "+id);return true;
   });
@@ -398,7 +451,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     } finally {tabMutation=false;}
   };
   try {
-    globalThis.load("/app0/assets/browser-shell-model.js");initializeBookmarks();initializeHistory();initializeSettings();
+    globalThis.load("/app0/assets/browser-shell-model.js");closedTabs=new OrbisFoxShellModel.ClosedTabs();initializeBookmarks();initializeHistory();initializeSettings();
     host.setDiagnosticsEnabled?.(host.diagnosticsEnabled===true);
     controls=new OrbisFoxShellModel.Controller();chrome=host.createChromeBrowser(1280,720);
     chrome.loadURI(io.newURI(CHROME),{triggeringPrincipal:ssm.getSystemPrincipal()});
@@ -415,11 +468,34 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
           const candidate=win.wrappedJSObject.OrbisFoxShell;
           if(!candidate?.ready||!candidate.contentElement()?.docShell){if(Date.now()-started>15000)throw new Error("Chrome/content readiness timeout");return;}
           ui=candidate;
-          ui.bind({navigate:text=>action(()=>load(!text||text==="home"||text===OrbisFoxShellModel.HOME||/^[a-z][a-z0-9+.-]*:/i.test(text)?text:OrbisFoxShellModel.homeAddress(text,settings.snapshot().searchEngine))),search:text=>action(()=>load(OrbisFoxShellModel.homeAddress(text,settings.snapshot().searchEngine))),
+          ui.bind({navigate:text=>action(()=>load(text==="home"?homeTarget():OrbisFoxShellModel.navigationText(text,settings.snapshot().searchEngine))),search:text=>action(()=>load(OrbisFoxShellModel.homeAddress(text,settings.snapshot().searchEngine))),
             settings:()=>({...settings.snapshot(),diagnostics:host.diagnosticsEnabled===true}),
             setDiagnostics:value=>action(()=>{host.setDiagnosticsEnabled(value===true);return true;}),
             clearDiagnosticLogs:()=>{host.setDiagnosticsEnabled(false);return createOrbisLogCleaner(Cc,Ci)();},
-            saveSettings:changes=>action(()=>{if(!settingsAvailable)throw Error("Settings storage unavailable");settings.update(changes);if(changes.defaultZoom!==undefined&&active?.element.frameLoader?.browsingContext){active.zoom=changes.defaultZoom;active.element.frameLoader.browsingContext.fullZoom=active.zoom/100;}return true;}),
+            saveSettings:changes=>action(()=>{if(!settingsAvailable)throw Error("Settings storage unavailable");const oldZoom=settings.snapshot().defaultZoom;settings.update(changes);
+              // Like Firefox, a new default zoom applies to every tab still at
+              // the old default (and the current tab); manual zooms are kept.
+              if(changes.defaultZoom!==undefined)for(const tab of tabs){const context=tab.element?.frameLoader?.browsingContext;
+                if(context&&(tab===active||tab.zoom===oldZoom)){tab.zoom=changes.defaultZoom;context.fullZoom=tab.zoom/100;}}
+              if(changes.restoreSession!==undefined){lastSession=null;if(!changes.restoreSession)saveSession(true);}return true;}),
+            closedTabs:()=>closedTabs.snapshot(),closedTabsRevision:()=>closedTabs.revision,
+            reopenClosedTab:(index=0)=>tabAction(()=>{
+              const item=closedTabs.peek(index);if(!item)throw Error("No recently closed tab");if(!gates().web)throw Error("Web navigation is not ready yet");
+              // Firefox reopens in a new tab; at the three-tab cap use this one.
+              if(tabs.length<OrbisFoxShellModel.MAX_TABS){const tab=newTab(item.url);if(tab.pending!==item.url&&tab.model.requested!==item.url)return false;}
+              else if(!load(item.url))return false;
+              closedTabs.remove(index);return true;}),
+            removeHistory:url=>action(()=>{if(!history)throw Error("History storage unavailable");return history.remove(url);}),
+            clearSiteData:done=>action(()=>{
+              // Gecko's own ClearDataService; the shell never touches cookie files.
+              // Clearing auth tokens cancels every connection, so never run it
+              // while the one-shot startup network/TLS probes still decide the web gate.
+              if(!gates().web)throw Error("Wait until web browsing is ready before clearing site data");
+              const service=Cc["@mozilla.org/clear-data-service;1"].getService(Ci.nsIClearDataService),flags=Ci.nsIClearDataService;
+              const mask=(flags.CLEAR_COOKIES_AND_SITE_DATA||((flags.CLEAR_COOKIES|0)|(flags.CLEAR_DOM_STORAGES|0)))|(flags.CLEAR_ALL_CACHES|0);
+              if(!mask)throw Error("Site data clearing unavailable");
+              service.deleteData(mask,{onDataDeleted(failed){host.log("Browser UI: cookies/site data cleared failedFlags="+(failed>>>0));try{done?.((failed>>>0)===0);}catch(_){}}});
+              return true;}),
             zoomValue:()=>active?.zoom||100,zoom:delta=>action(()=>{if(!active||![-10,0,10].includes(delta))throw Error('Invalid zoom action');const zoom=Math.max(50,Math.min(200,delta===0?settings.snapshot().defaultZoom:active.zoom+delta));const context=active.element.frameLoader?.browsingContext;if(!context)throw Error('Page zoom unavailable');context.fullZoom=zoom/100;active.zoom=zoom;return true;}),
             find:(text,backwards=false)=>action(()=>{if(typeof text!=='string'||!text.trim()||text.length>512)throw Error('Enter text to find');const finder=active.nav.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIWebBrowserFind);finder.searchString=text;finder.wrapFind=true;finder.findBackwards=!!backwards;const found=finder.findNext();active.model.message=found?'Match found':'No match found';return found;}),
             exitContentFullscreen:()=>action(()=>{chrome.docShell.domWindow.windowUtils.exitFullscreen();return true;}),
@@ -428,7 +504,9 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
             history:limit=>history?.snapshot(limit)||[],historyRevision:()=>history?.revision??-1,
             historyAvailable:()=>!!history,favicon:url=>icons.request(url),faviconRevision:()=>icons.revision,
             removeBookmark:url=>action(()=>{if(!bookmarks)throw Error("Bookmark storage unavailable");bookmarks.remove(url);return true;}),
-            clearHistory:()=>action(()=>{if(!history)throw Error("History storage unavailable");history.clear();return true;}),
+            clearHistory:()=>action(()=>{if(!history)throw Error("History storage unavailable");history.clear();
+              // Clearing history also forgets closed tabs and the saved session list.
+              closedTabs.clear();lastSession=null;saveSession(true);return true;}),
             toggleMedia:()=>action(()=>{
               const document=active?.nav?.document;if(!gates().web||document?.nodePrincipal?.isSystemPrincipal!==false)throw Error('No active web media');
               const media=[...(document.querySelectorAll('video,audio')||[])].slice(0,8).find(element=>!element.ended)||document.querySelector('video,audio');
@@ -494,7 +572,10 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
           }
         }catch(error){if(scrollFailures++<8)host.log('Browser wheel: dispatch skipped; will retry: '+String(error).slice(0,180));}
         for(const tab of tabs){
-          if(!tab.nav)continue;const document=tab.nav.document;tab.model.history(tab.nav.canGoBack,tab.nav.canGoForward);tab.model.title=document?.documentURI===OrbisFoxShellModel.HOME?"Home":document?.title?.slice(0,160)||"Untitled";
+          if(!tab.nav)continue;const document=tab.nav.document;tab.model.history(tab.nav.canGoBack,tab.nav.canGoForward);
+          // Like Firefox, an untitled or still-loading page shows its host.
+          tab.model.title=document?.documentURI===OrbisFoxShellModel.HOME?"Home":document?.title?.trim().slice(0,160)||siteName(tab.model.busy?tab.model.requested:tab.model.location)||"Untitled";
+          tab.model.security=pageSecurity(tab);
           if(tab===active&&document&&[OrbisFoxShellModel.HOME,OrbisFoxShellModel.LAN].includes(document.documentURI)){
             const pos=(document.defaultView?.scrollX||0)+","+(document.defaultView?.scrollY||0);
             if(pos!=="0,0"&&pos!==lastScroll&&scrollReports<12){host.log("Browser UI: actual content scroll position "+pos);++scrollReports;}lastScroll=pos;
@@ -507,12 +588,15 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
           }
         }
         const snapshot=network?.snapshot();if(!https&&snapshot?.storage.ok&&snapshot.dns.ok)https=startTrustedHTTPSProbes(Cc,Ci,io,ssm,host,snapshot);
+        if(!webWasReady&&gates().web){webWasReady=true;webBecameReady();}
+        if(webWasReady&&ticks%30===0)saveSession();
         // Static probe transcripts do not need serialization every UI frame.
         if(host.diagnosticsEnabled!==true)diagnosticText='';
         else if(!diagnosticText||ticks%30===0)diagnosticText=JSON.stringify({nativeNetReady:host.nativeNetworkReady,nativeJitReady:host.nativeJitReady,nativeAudioReady:host.nativeAudioReady,profile:profile?.snapshot(),network:snapshot||"Awaiting8 checks",https:https?.snapshot()||"Awaiting DNS/storage",
           tabs:tabs.length,maxTabs:OrbisFoxShellModel.MAX_TABS,scope:"General HTTP/HTTPS after storage/quota/TLS gates. Unsafe schemes/credentials denied. No production sandbox/security certification."},null,2);
         const diagnostic=diagnosticText;
         ui.renderTabs(tabs.map(tab=>({id:tab.id,...tab.model.snapshot(),favicon:icons.request(tab.model.location,tab.nav?.document)})),active.id);ui.update(active.model.snapshot(),diagnostic,{...gates(),bookmarksAvailable:!!bookmarks});
+        if(active.model.security!==lastSecurity){lastSecurity=active.model.security;lastNativeScene="";}
         if(host.setNativeChromeState&&ui.nativeChromeScene&&(ticks%30===0||!lastNativeScene)){
           const scene=ui.nativeChromeScene();if(scene&&scene!==lastNativeScene){host.setNativeChromeState(scene);lastNativeScene=scene;}}
         if(diagnostic!==lastDiagnostics){host.log("Browser UI diagnostics: "+diagnostic.slice(0,3900));lastDiagnostics=diagnostic;}
@@ -524,6 +608,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     try{removeFullscreen?.();}catch(_){}
     if(middleLink)chrome?.docShell.domWindow.removeEventListener('chromelinkclick',middleLink,true);
     const cleanup=(name,callback)=>{try{callback();}catch(error){host.log("ERROR: shell cleanup "+name+": "+error);}};
+    if(webWasReady)cleanup("session",()=>saveSession(true));
     cleanup("favicon channels",()=>icons.close());
     cleanup("native chrome",()=>host.setNativeChromeState?.(''));
     cleanup("timer",()=>timer.cancel());cleanup("native keyboard",()=>host.cancelAddressKeyboard());textTarget=null;keyboardPending=null;
