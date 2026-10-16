@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Produce OrbisFox 0.68 CPU affinity/fullscreen/website appearance candidate; preserve matched milestones."""
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / 'build/gecko-app'
@@ -60,6 +62,57 @@ def stage_resources(source, target):
     return files
 
 
+def archive_resources(target):
+    """Opt-in standard Gecko omni.ja; store unchanged bytes, not compressed code.
+
+    Keep loose greprefs/manifest copies for existing filesystem diagnostics and
+    rollback inspection. Gecko uses the archive versions when omni.ja is present.
+    """
+    if target.is_symlink() or not target.is_dir():
+        raise ValueError('Resource archive requires a real staged directory')
+    paths = sorted(target.rglob('*'))
+    if any(path.is_symlink() or not (path.is_file() or path.is_dir()) for path in paths):
+        raise ValueError('Resource archive rejects symlinks and special files')
+    files = sorted((path for path in paths if path.is_file()),
+                   key=lambda path: path.relative_to(target).as_posix())
+    required = ('greprefs.js', 'chrome.manifest', 'defaults/pref/orbisfox.js')
+    if any(not (target / name).is_file() for name in required):
+        raise ValueError('Required generated preferences/manifest missing from resource archive')
+    archive_path = target / 'omni.ja'
+    pending = target / 'omni.ja.pending'
+    if archive_path.exists() or pending.exists():
+        raise ValueError('Resource archive already exists')
+    entries = []
+    with zipfile.ZipFile(pending, 'x', compression=zipfile.ZIP_STORED) as archive:
+        for path in files:
+            name = path.relative_to(target).as_posix()
+            data = path.read_bytes()
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            info.compress_type = zipfile.ZIP_STORED
+            archive.writestr(info, data)
+            entries.append({'path': name, 'bytes': len(data),
+                            'sha256': hashlib.sha256(data).hexdigest()})
+    # Read every entry back before removing any of the loose staged inputs.
+    with zipfile.ZipFile(pending) as archive:
+        for entry in entries:
+            if hashlib.sha256(archive.read(entry['path'])).hexdigest() != entry['sha256']:
+                raise ValueError('Resource archive round-trip failed: ' + entry['path'])
+    pending.replace(archive_path)
+    compatibility = ('greprefs.js', 'chrome.manifest')
+    for path in files:
+        if path.relative_to(target).as_posix() not in compatibility:
+            path.unlink()
+    for path in sorted((p for p in paths if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+        path.rmdir()
+    return {'format': 'omni-stored', 'path': 'gecko/omni.ja',
+            'bytes': archive_path.stat().st_size,
+            'sha256': hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+            'logical_bytes': sum(entry['bytes'] for entry in entries),
+            'loose_compatibility_files': list(compatibility), 'entries': entries}
+
+
 def complete_gp4(path, files):
     """Avoid command-line size limits and include every real resource directory."""
     tree = ET.parse(path)
@@ -90,7 +143,11 @@ def preserved_baseline_digest():
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--resource-format', choices=('unpacked', 'omni'), default='unpacked',
+                        help='omni is an opt-in packaging-only trial; console validation pending')
+    args = parser.parse_args(argv)
     app = json.loads((BUILD / 'build-report.json').read_text())
     if (app.get('version') != VERSION or not app.get('final_engine_application_linked')
             or not app.get('baseline_unchanged') or not app.get('upstream_static_nss_closure_verified')):
@@ -165,6 +222,7 @@ def main():
         target = stage / destination
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
+    resource_archive = archive_resources(stage / 'gecko') if args.resource_format == 'omni' else None
     licenses = {
         'project-MIT.txt': ROOT / 'LICENSE',
         'project-license-scope.md': ROOT / 'LICENSES/README.md',
@@ -215,6 +273,9 @@ def main():
         'bytes': artifact.stat().st_size, 'sha256': hashlib.sha256(artifact.read_bytes()).hexdigest(),
         'gecko_revision': PKG.SWGL_REVISION, 'native_full_gecko_linked': True,
         'native_executable': app['executable'],
+        'gecko_resource_format': args.resource_format,
+        'gecko_resource_archive': resource_archive,
+        'resource_archive_hardware_verified': False,
         'native_affinity_processor_count_adapter_implemented': app['processor_count_real_affinity_only_full_gecko_sdk_other_sysconf_preserved'],
         'website_color_scheme_preference_implemented': True,
         'website_fullscreen_focus_lifecycle_and_chrome_events_implemented': True,

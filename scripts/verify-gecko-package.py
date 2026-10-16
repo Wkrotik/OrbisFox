@@ -3,10 +3,11 @@
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import struct
 import subprocess
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / 'build/gecko-app'
@@ -15,6 +16,39 @@ BUILD = ROOT / 'build/gecko-app'
 def digest(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def verify_resource_archive(root, expected):
+    """Validate every original resource, not just the outer archive digest."""
+    compatibility = ['greprefs.js', 'chrome.manifest']
+    if (expected.get('format') != 'omni-stored' or expected.get('path') != 'gecko/omni.ja'
+            or expected.get('loose_compatibility_files') != compatibility):
+        raise ValueError('Unexpected resource archive format')
+    path = root / 'omni.ja'
+    if path.is_symlink() or path.stat().st_size != expected['bytes'] or digest(path) != expected['sha256']:
+        raise ValueError('Resource archive differs from its build report')
+    entries = expected['entries']
+    names = [entry['path'] for entry in entries]
+    if (not names or names != sorted(set(names))
+            or any('\\' in name or PurePosixPath(name).is_absolute()
+                   or '..' in PurePosixPath(name).parts or PurePosixPath(name).as_posix() != name
+                   for name in names)
+            or not {'greprefs.js', 'chrome.manifest', 'defaults/pref/orbisfox.js'} <= set(names)):
+        raise ValueError('Unsafe, duplicate or incomplete resource archive manifest')
+    with zipfile.ZipFile(path) as archive:
+        if archive.namelist() != names:
+            raise ValueError('Resource archive entry list differs from original inputs')
+        for entry in entries:
+            info = archive.getinfo(entry['path'])
+            data = archive.read(info)
+            if (info.compress_type != zipfile.ZIP_STORED or len(data) != entry['bytes']
+                    or hashlib.sha256(data).hexdigest() != entry['sha256']):
+                raise ValueError('Resource archive entry mismatch: ' + entry['path'])
+            if entry['path'] in compatibility:
+                loose = root / entry['path']
+                if loose.is_symlink() or not loose.is_file() or digest(loose) != entry['sha256']:
+                    raise ValueError('Loose compatibility resource differs from archive: ' + entry['path'])
+    return len(entries)
 
 
 def read_sfo(data):
@@ -73,6 +107,17 @@ def main():
     extracted_prefs = payload / 'gecko/greprefs.js'
     if not extracted_prefs.is_file() or digest(generated_prefs) != digest(extracted_prefs):
         raise ValueError('Required generated Gecko preferences missing or differ from engine output')
+    archive = expected.get('gecko_resource_archive')
+    archive_entries = 0
+    if expected.get('gecko_resource_format', 'unpacked') == 'omni':
+        if not archive:
+            raise ValueError('Omni package is missing its original-resource manifest')
+        archive_entries = verify_resource_archive(payload / 'gecko', archive)
+        with zipfile.ZipFile(payload / 'gecko/omni.ja') as reader:
+            if hashlib.sha256(reader.read('greprefs.js')).hexdigest() != digest(generated_prefs):
+                raise ValueError('Archived generated preferences differ from engine output')
+    elif archive:
+        raise ValueError('Unexpected resource archive in unpacked package report')
     staged_sfo = read_sfo((stage / 'sce_sys/param.sfo').read_bytes())
     actual_sfo = read_sfo((payload / 'sce_sys/param.sfo').read_bytes())
     for name, value in staged_sfo.items():
@@ -90,6 +135,7 @@ def main():
         raise ValueError('Common dialog must follow real system enter-button assignment')
     report = {'common_dialog_enter_button_assignment_system_verified': True, 'package_sha256': digest(package), 'verified_payload_files': len(verified),
               'all_non_generated_staged_files_match_extracted_package': True,
+              'archived_resource_entries_hash_verified': archive_entries,
               'generated_sfo_identity_version_and_source_fields_verified': True,
               'generated_sfo_additional_keys': ['PUBTOOLINFO', 'PUBTOOLVER'],
               'html_rendered_on_console': False, 'hardware_tested': False, 'files': verified}
@@ -97,6 +143,7 @@ def main():
     expected['extracted_payload_verified'] = True
     expected['extracted_payload_files_verified'] = len(verified)
     expected['extracted_sfo_verified'] = True
+    expected['extracted_resource_archive_entries_verified'] = archive_entries
     expected['extracted_generated_greprefs_matches_engine_output'] = True
     expected['generated_greprefs_sha256'] = digest(generated_prefs)
     (ROOT / 'dist/gecko/build-report.json').write_text(json.dumps(expected, indent=2) + '\n')

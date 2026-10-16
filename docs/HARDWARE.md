@@ -65,6 +65,36 @@ raw logs, kernel output, dumps, captures, profiles or screenshots with private
 URLs. Historical raw evidence and the original bring-up notes are retained
 locally under ignored `build/project-history/` and hardware archive directories.
 
+## Opt-in resource packaging trial
+
+The default package remains unpacked. A packaging-only candidate can use Gecko's
+existing `omni.ja` loader instead of thousands of separate resource files:
+
+```sh
+python3 scripts/package-gecko.py --resource-format omni
+python3 scripts/verify-gecko-package.py
+```
+
+Build/verify the native application first, including any local native changes.
+Retain the previous package, ELF and reports before producing the candidate.
+The archive uses ZIP **stored** entries: unchanged resource bytes, no compression,
+feature removal or executable changes. Generated preferences and chrome manifests
+are included; small loose compatibility copies remain for filesystem diagnostics.
+Extraction validation checks every archived resource against its original hash,
+not just the outer archive. Fonts, licenses and codec source remain packaged.
+
+The maintainer reported a successful console trial of the compact candidate with
+local scrolling changes, and confirmed that L3 Find / R3 middle-click work as
+expected; no button remapping was needed. This is reported hardware feedback, not
+an independently captured compatibility or performance result. The trial reduced
+the package from 482,148,352 to 327,811,072 bytes without resource compression.
+
+Broader validation should cover startup, Home/Library/Settings, fonts/emoji, Find,
+scrolling, normal navigation, fullscreen and controlled media before making this
+the default. Record cold/warm loading and memory observations too: archive file
+mapping is a different I/O pattern. Keep the unpacked package as rollback; a
+smaller extracted image alone does not establish that Gecko loaded it.
+
 ## Controlled fixtures
 
 These are bounded local HTTP services, not public production servers. Use the
