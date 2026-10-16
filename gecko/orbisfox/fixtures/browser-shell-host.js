@@ -354,7 +354,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
         if(flags&Ci.nsIWebProgressListener.STATE_START){tab.model.busy=true;tab.model.message="Loading…";tab.model.issuer="";tab.tlsSecure=false;}
         if(flags&Ci.nsIWebProgressListener.STATE_STOP){
           tab.model.stopped(status,tab.nav?.document?.documentURI);host.log("Browser UI: tab="+tab.id+" content document stop status=0x"+(status>>>0).toString(16));
-          reportPageResources(tab);
+          tab.securityDirty=true;reportPageResources(tab);
           if((status>>>0)===0)recordVisit(tab);
           if(request&&/^https:\/\//.test(tab.model.requested))try{
             const channel=request.QueryInterface(Ci.nsIChannel),info=channel.securityInfo;
@@ -369,7 +369,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
           }catch(error){host.log("Browser UI: HTTPS evidence unavailable: "+error);}
         }
       },
-      onLocationChange(web,request,location,flags=0){if(!tab.closed&&web.DOMWindow===e.contentWindow&&location){
+      onLocationChange(web,request,location,flags=0){if(!tab.closed&&web.DOMWindow===e.contentWindow&&location){tab.securityDirty=true;
         tab.model.locationChanged(location.spec);tab.model.requested=location.spec;
         if(flags&Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT)recordVisit(tab);
       }},
@@ -575,7 +575,9 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
           if(!tab.nav)continue;const document=tab.nav.document;tab.model.history(tab.nav.canGoBack,tab.nav.canGoForward);
           // Like Firefox, an untitled or still-loading page shows its host.
           tab.model.title=document?.documentURI===OrbisFoxShellModel.HOME?"Home":document?.title?.trim().slice(0,160)||siteName(tab.model.busy?tab.model.requested:tab.model.location)||"Untitled";
-          tab.model.security=pageSecurity(tab);
+          // Lock state changes with loads; recheck it then (and the active tab once
+          // a second for late mixed content) instead of on every 33 ms tick.
+          if(tab.securityDirty!==false||(tab===active&&ticks%30===0)){tab.model.security=pageSecurity(tab);tab.securityDirty=false;}
           if(tab===active&&document&&[OrbisFoxShellModel.HOME,OrbisFoxShellModel.LAN].includes(document.documentURI)){
             const pos=(document.defaultView?.scrollX||0)+","+(document.defaultView?.scrollY||0);
             if(pos!=="0,0"&&pos!==lastScroll&&scrollReports<12){host.log("Browser UI: actual content scroll position "+pos);++scrollReports;}lastScroll=pos;
