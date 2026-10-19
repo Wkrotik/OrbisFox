@@ -72,6 +72,7 @@ def prepare_source():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--prepare-only', action='store_true')
+    parser.add_argument('--mesa', action='store_true', help='Compile the default-off Mesa/WebRender experiment')
     args = parser.parse_args()
     prepare_source()
     if args.prepare_only:
@@ -109,7 +110,8 @@ def main():
                '--disable-crashreporter', '--disable-webrtc', '--disable-accessibility',
                '--disable-necko-wifi', '--disable-webdriver', '--disable-audio-backends',
                '--disable-sandbox', '--without-wasm-sandboxed-libraries',
-               '--without-system-zlib']
+               '--without-system-zlib',
+               '--enable-orbis-mesa' if args.mesa else '--disable-orbis-mesa']
     log = BUILD / 'configure-output.log'
     with log.open('w') as output:
         result = subprocess.run(command, cwd=BUILD, env=env,
@@ -122,6 +124,7 @@ def main():
               or 'FATAL ERROR PROCESSING MOZBUILD FILE' in line
               or 'Error processing test manifest' in line]
     report = {'revision': REVISION, 'stage': 'full Gecko cross-configuration',
+              'experimental_mesa': args.mesa,
               'result': result.returncode, 'command': command,
               'log': str(log.relative_to(ROOT)),
               'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest(),

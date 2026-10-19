@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import runpy
 from pathlib import Path, PurePosixPath
 import shutil
 import struct
@@ -69,8 +70,9 @@ def read_sfo(data):
 
 def main():
     stage = BUILD / 'pkg'
-    package = ROOT / 'dist/gecko/OrbisFox.pkg'
     expected = json.loads((ROOT / 'dist/gecko/build-report.json').read_text())
+    identity = runpy.run_path(str(ROOT / 'scripts/gecko-package-identity.py'))['report_identity'](expected)
+    package = ROOT / 'dist/gecko' / identity['package_name']
     if digest(package) != expected['sha256']:
         raise ValueError('Package differs from its build report')
     sdk = Path(os.environ.get('OO_PS4_TOOLCHAIN', ROOT / '.deps/OpenOrbis/PS4Toolchain')).resolve()
@@ -125,15 +127,17 @@ def main():
             raise ValueError('Extracted SFO mismatch: ' + name)
     if set(actual_sfo) - set(staged_sfo) != {'PUBTOOLINFO', 'PUBTOOLVER'}:
         raise ValueError('Unexpected generated SFO metadata')
-    required = {'TITLE': b'OrbisFox\0', 'TITLE_ID': b'ORBF00001\0',
+    required = {'TITLE': (identity['title']+'\0').encode(), 'TITLE_ID': (identity['title_id']+'\0').encode(),
                 'APP_VER': b'0.68\0', 'VERSION': b'0.68\0', 'CATEGORY': b'gd\0',
-                'CONTENT_ID': b'IV0000-ORBF00001_00-ORBISFOXPROBE000\0'}
+                'CONTENT_ID': (identity['content_id']+'\0').encode()}
     for name, value in required.items():
         if actual_sfo.get(name) != (0x204, value):
             raise ValueError('Unexpected package identity/version: ' + name)
     if actual_sfo.get('ATTRIBUTE') != (0x404, struct.pack('<I', 0x20)):
         raise ValueError('Common dialog must follow real system enter-button assignment')
-    report = {'common_dialog_enter_button_assignment_system_verified': True, 'package_sha256': digest(package), 'verified_payload_files': len(verified),
+    packaging = runpy.run_path(str(ROOT / 'scripts/package.py'))
+    self_metadata = packaging['verify_self'](payload / 'eboot.bin', packaging['AUTHINFO'], 0x3800000000000035)
+    report = {'self_authentication_metadata_verified': self_metadata, 'common_dialog_enter_button_assignment_system_verified': True, 'package_sha256': digest(package), 'verified_payload_files': len(verified),
               'all_non_generated_staged_files_match_extracted_package': True,
               'archived_resource_entries_hash_verified': archive_entries,
               'generated_sfo_identity_version_and_source_fields_verified': True,

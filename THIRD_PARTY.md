@@ -24,6 +24,24 @@ The SDK asset is `toolchain-llvm-18.2.zip`, SHA-256
 `5006bb8629a40093b712fac971456fa4d5ad3fafaadb16d11c10b8a93b8b496f`.
 Pin definitions and hashes in the producer scripts are authoritative.
 
+## Default-off experimental Mesa dependencies
+
+The `experiment/mesa-webrender` branch adds the following public dependencies
+only for explicit `--mesa` builds; the normal software build does not link them.
+
+| Component | Source / pin | License and role |
+| --- | --- | --- |
+| Mesa PS4 | [orbis-ports/mesa-ps4](https://github.com/orbis-ports/mesa-ps4), `1a59cc147b54e3970814b37313e2f27357672e9d` | MIT and per-file/component notices, retained in the exact source archive. EGL/GLES, Zink, RADV and GPU shader compilation. |
+| Porting headers | [orbis-ports/orbis-compat](https://github.com/orbis-ports/orbis-compat), `6922a7b6f4291a28edd239f1a4db50ed7aa00359` | MIT with the BSD-3-Clause `include/sys/ioccom.h` exception. Headers only; the broad runtime archive is not linked. |
+| Porting kit | [orbis-ports/orbis-porting-kit](https://github.com/orbis-ports/orbis-porting-kit), `213b0c38ff25ea7ca402c8844a6494086d0f1cae` | MIT except the GPL-3.0-only `cmake/orbis-tls.ld`. Exact public source and notices retained; browser retains its own designated GPL linker script. |
+| zlib | Mesa's pinned zlib 1.3.1 source and Meson wrap patch | zlib license and patch notices retained in their source archives. Real static compression library. |
+
+The experimental installer stages these public source archives, the exact Mesa
+patched files, dependency notices, native bridge source and build configuration
+under `assets/misc/mesa/`, with a SHA-256 manifest. It includes no proprietary SDK
+or firmware binaries. These materials do **not** by themselves complete the
+browser's corresponding-source/relink or public redistribution checklist.
+
 ## OpenOrbis-derived material
 
 The linker scripts adapt OpenOrbis's GPL-v3 `link.x`; its license remains.

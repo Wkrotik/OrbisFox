@@ -147,6 +147,22 @@ class ConsoleWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Runtime source changed'):
                 DEPLOY.candidate()
 
+    def test_mesa_candidate_uses_distinct_installer_and_requires_matching_flavor(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(DEPLOY, 'ROOT', Path(directory)):
+            root = Path(directory)
+            pkg, app = self.candidate_files(root)
+            (root / 'dist/gecko/OrbisFox.pkg').rename(root / 'dist/gecko/OrbisFox-Mesa.pkg')
+            pkg.update(experimental_mesa=True, package_identity=DEPLOY.IDENTITY['package_identity'](True),
+                       package='dist/gecko/OrbisFox-Mesa.pkg')
+            app['experimental_native_mesa'] = {'verified_dependency_fixture': True}
+            (root / 'dist/gecko/build-report.json').write_text(json.dumps(pkg))
+            (root / 'build/gecko-app/build-report.json').write_text(json.dumps(app))
+            self.assertEqual(DEPLOY.candidate()[0], '0.51')
+            app['experimental_native_mesa'] = None
+            (root / 'build/gecko-app/build-report.json').write_text(json.dumps(app))
+            with self.assertRaisesRegex(ValueError, 'flavor mismatch'):
+                DEPLOY.candidate()
+
     def test_candidate_rejects_incomplete_native_build(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(DEPLOY, 'ROOT', Path(directory)):
             root = Path(directory)
@@ -179,9 +195,10 @@ class ConsoleWorkflowTests(unittest.TestCase):
             self.candidate_files(root)
             (root / 'Makefile').write_text('fixture')
             before = {'installers': ['unrelated.pkg', 'OrbisFox.pkg'], 'markers': {}}
-            with patch.object(DEPLOY, 'console_state', side_effect=[before, before]), patch.object(DEPLOY, 'prepare_capture', return_value={'active': False}), patch.object(DEPLOY.subprocess, 'run') as run, patch('sys.argv', ['deploy', '--host', 'console.example.test']), contextlib.redirect_stdout(io.StringIO()):
+            with patch.object(DEPLOY, 'console_state', side_effect=[before, before]), patch.object(DEPLOY, 'prepare_capture', return_value={'active': False}) as capture, patch.object(DEPLOY.subprocess, 'run') as run, patch('sys.argv', ['deploy', '--host', 'console.example.test']), contextlib.redirect_stdout(io.StringIO()):
                 run.return_value.returncode = 0
                 self.assertEqual(DEPLOY.main(), 0)
+                capture.assert_not_called()
             report = json.loads((root / 'build/hardware-0.51/deployment-report.json').read_text())
             self.assertTrue(report['uploaded'])
             self.assertTrue(report['uploader_full_remote_SHA256_verified'])
@@ -191,6 +208,36 @@ class ConsoleWorkflowTests(unittest.TestCase):
             self.assertEqual((root / 'build/hardware-0.51/orbisfox.elf').read_bytes(), b'elf')
             self.assertEqual(run.call_args.kwargs['timeout'], 110)
             self.assertIn('--gecko', run.call_args.args[0])
+
+    def test_same_version_redeployment_preserves_old_and_new_matched_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(DEPLOY, 'ROOT', Path(directory)):
+            root = Path(directory)
+            self.candidate_files(root)
+            (root / 'Makefile').write_text('fixture')
+            out = root / 'build/hardware-0.51'
+            old = out / 'deployments/previous'
+            old.mkdir(parents=True)
+            for name, data in [('OrbisFox.pkg', b'previous-pkg'), ('orbisfox.elf', b'previous-elf')]:
+                (out / name).write_bytes(data)
+                (old / name).write_bytes(data)
+            before = {'installers': ['unrelated.pkg', 'OrbisFox.pkg'], 'markers': {}}
+            with patch.object(DEPLOY, 'console_state', return_value=before), patch.object(DEPLOY, 'prepare_capture') as capture, patch.object(DEPLOY.subprocess, 'run') as run, patch('sys.argv', ['deploy', '--host', 'console.example.test']), contextlib.redirect_stdout(io.StringIO()):
+                run.return_value.returncode = 0
+                self.assertEqual(DEPLOY.main(), 0)
+                capture.assert_not_called()
+            report = json.loads((out / 'deployment-report.json').read_text())
+            self.assertTrue(report['uploaded'])
+            for name, data in [('OrbisFox.pkg', b'pkg'), ('orbisfox.elf', b'elf')]:
+                artifact = report['artifacts'][name]
+                archived = Path(artifact['path'])
+                self.assertTrue(archived.is_relative_to(out / 'deployments'))
+                self.assertEqual(archived.read_bytes(), data)
+                self.assertEqual(artifact['sha256'], hashlib.sha256(data).hexdigest())
+                self.assertNotEqual(archived.stat().st_ino, (root / ('dist/gecko/' if name.endswith('.pkg') else 'build/gecko-app/') / name).stat().st_ino)
+            self.assertEqual((out / 'OrbisFox.pkg').read_bytes(), b'previous-pkg')
+            self.assertEqual((out / 'orbisfox.elf').read_bytes(), b'previous-elf')
+            self.assertEqual((old / 'OrbisFox.pkg').read_bytes(), b'previous-pkg')
+            self.assertEqual((old / 'orbisfox.elf').read_bytes(), b'previous-elf')
 
     def test_deploy_failure_keeps_archives_and_reports_failure(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(DEPLOY, 'ROOT', Path(directory)):
@@ -204,6 +251,56 @@ class ConsoleWorkflowTests(unittest.TestCase):
             self.assertFalse(report['uploaded'])
             self.assertTrue(report['errors'])
             self.assertEqual((root / 'build/hardware-0.51/OrbisFox.pkg').read_bytes(), b'pkg')
+
+    def probe_files(self, root):
+        base = root / 'build/shared-memory-probe'; base.mkdir(parents=True)
+        name = DEPLOY.UPLOADER['SHARED_MEMORY_PROBE_PACKAGE']
+        (base / name).write_bytes(b'probe-pkg')
+        (base / 'shared-memory-probe.elf').write_bytes(b'probe-elf')
+        (root / 'Makefile').write_text('fixture')
+        report = {'native_linked': True,
+                  'elf': {'file': 'build/shared-memory-probe/shared-memory-probe.elf',
+                          'bytes': 9, 'sha256': hashlib.sha256(b'probe-elf').hexdigest()},
+                  'sources': {'Makefile': hashlib.sha256(b'fixture').hexdigest()},
+                  'package': {'file': 'build/shared-memory-probe/' + name,
+                              'bytes': 9, 'sha256': hashlib.sha256(b'probe-pkg').hexdigest(),
+                              'title_id': 'SHMP00001', 'content_id': 'IV0000-SHMP00001_00-SHMEMPROBE000001',
+                              'sections_verified': 17, 'extracted_sfo_verified': True,
+                              'extracted_files_verified': ['eboot.bin', 'sce_sys/param.sfo', 'sce_sys/icon0.png', 'source.tar.gz'],
+                              'self': {'authinfo_bytes': 136, 'paid': '0x3800000000000035', 'signature_verified': True}}}
+        (base / 'build-report.json').write_text(json.dumps(report))
+        return report
+
+    def test_probe_candidate_rejects_changed_sources_and_artifacts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder); report = self.probe_files(root)
+            validate = DEPLOY.UPLOADER['shared_memory_probe_candidate']
+            self.assertEqual(validate(root), report)
+            (root / 'Makefile').write_text('changed')
+            with self.assertRaisesRegex(ValueError, 'source changed'): validate(root)
+            (root / 'Makefile').write_text('fixture')
+            (root / report['elf']['file']).write_bytes(b'bad')
+            with self.assertRaisesRegex(ValueError, 'artifact mismatch'): validate(root)
+
+    def test_probe_deployment_is_separate_and_cannot_start_capture(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(DEPLOY, 'ROOT', Path(folder)):
+            root = Path(folder); self.probe_files(root)
+            state = {'installers': ['OrbisFox.pkg', 'OrbisFox-Mesa.pkg', 'unrelated.pkg'], 'markers': {}}
+            with patch.object(DEPLOY, 'console_state', return_value=state), patch.object(DEPLOY, 'prepare_capture') as capture, patch.object(DEPLOY.subprocess, 'run') as run, patch('sys.argv', ['deploy', '--host', 'console.example.test', '--shared-memory-probe']), contextlib.redirect_stdout(io.StringIO()):
+                run.return_value.returncode = 0
+                self.assertEqual(DEPLOY.main(), 0)
+                capture.assert_not_called()
+                self.assertIn('--shared-memory-probe', run.call_args.args[0])
+                self.assertNotIn('--gecko', run.call_args.args[0])
+            report = json.loads((root / 'build/hardware-00.01-shmem/deployment-report.json').read_text())
+            self.assertTrue(report['uploaded'])
+            self.assertTrue(report['unrelated_installers_preserved'])
+            self.assertFalse(report['installed'])
+            self.assertFalse(report['launched'])
+            self.assertFalse(report['capture']['new_reader'])
+            self.assertEqual((root / 'build/hardware-00.01-shmem/shared-memory-probe.elf').read_bytes(), b'probe-elf')
+            with patch('sys.argv', ['deploy', '--host', 'console.example.test', '--shared-memory-probe', '--capture']), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit): DEPLOY.main()
 
     def test_deployer_reuses_only_actual_registered_installer_names(self):
         self.assertIn('IV0000-ORBV00001_00-ORBISFOXVIDEO000.pkg', DEPLOY.REGISTERED_INSTALLERS)

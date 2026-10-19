@@ -11,6 +11,14 @@ class Element {
   getBoundingClientRect(){return {left:0,top:0,right:1280,bottom:720};}
   scrollBy(x,y){this.scrollDelta=[x,y];}
   querySelectorAll(){return this.document.all.filter(e=>e!==this&&this.contains(e)&&e.dataset.control);}
+  get hidden(){return this._hidden??false;}
+  set hidden(value){this._hidden=!!value;this.propertyWrites=(this.propertyWrites||0)+1;}
+  get disabled(){return this._disabled??false;}
+  set disabled(value){this._disabled=!!value;this.propertyWrites=(this.propertyWrites||0)+1;}
+  get value(){return this._value??'';}
+  set value(value){this._value=value;this.propertyWrites=(this.propertyWrites||0)+1;}
+  get title(){return this._title??'';}
+  set title(value){this._title=value;this.propertyWrites=(this.propertyWrites||0)+1;}
   get textContent(){return this._text??'';}
   set textContent(value){this._text=value;this.textWrites=(this.textWrites||0)+1;}
   getAttribute(name){return this.attributes[name]??null;}
@@ -76,8 +84,10 @@ for(let cycle=0;cycle<32;++cycle){
   assert(!fs.readFileSync('gecko/orbisfox/fixtures/browser.xhtml','utf8').includes('data-command="google"'));assert.equal($('back').disabled,true);assert.equal($('tab-title').textContent,'Home');assert.equal($('first-close-tab').disabled,true);
   assert(!$('home-screen').hidden);assert(!ui.canScroll());
   const unchanged=['tab-title','security','status','diagnostic-text','bookmark-button'].map(id=>[$(id),$(id).textWrites]);
+  const unchangedProperties=document.all.map(e=>[e,e.propertyWrites||0]);
   for(let repeat=0;repeat<20;++repeat){ui.renderTabs([{id:'content',...home}],'content');ui.update(home,'diagnostics',{lan:false,web:false});}
   for(const [element,writes] of unchanged)assert.equal(element.textWrites,writes,'unchanged chrome must not recreate text nodes');
+  for(const [element,writes] of unchangedProperties)assert.equal(element.propertyWrites||0,writes,'unchanged reflected properties must not dirty chrome: '+element.id);
   assert.equal($('bookmark-list').children[0].children[0].children[1].textContent,'<not markup>');
   assert.equal($('bookmark-list').children[0].children[0].children[0].className,'site-icon');
   assert.equal($('tab-dot').className,undefined);assert.match($('tab-dot').getAttribute('src'),/^data:image\/svg\+xml,/);

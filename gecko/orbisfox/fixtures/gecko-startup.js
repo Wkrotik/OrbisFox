@@ -1,6 +1,14 @@
 /* Trusted local/LAN development launcher using Firefox's own XPConnect shell.
  * Not injected into web content; no substitute DOM or layout implementation. */
 "use strict";
+function getTrustedProfilePath(Cc, Ci) {
+  // Native main owns HOME before XRE. Never accept an arbitrary filesystem path
+  // or fall back to the working profile if experimental setup is broken.
+  const path = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment).get("HOME");
+  if (path !== "/data/orbisfox/gecko-profile" && path !== "/data/orbisfox/mesa-profile")
+    throw new Error("Invalid native OrbisFox profile path");
+  return path;
+}
 // Bounded synchronous I/O probe of the packaged fixture, separate from the
 // actual file-channel document navigation. No replacement DOM or layout.
 function readTrustedFixture(Cc, Ci, file) {
@@ -56,11 +64,14 @@ function restoreOrbisFoxPreferences(Cc,Ci,profile,host) {
   const started = Date.now();
   try {
     const applyRuntimePreferences=()=>{
+    // Only the owned native GLES3 shader/readback gate may request hardware.
+    // Gecko still validates its real context and can fall back to SWGL.
+    const gpuReady=host.nativeGpuReady===true;
     for (const [name, value] of Object.entries({
       "gfx.webrender.all": true,
-      "gfx.webrender.software": true,
+      "gfx.webrender.software": !gpuReady,
       "gfx.webrender.compositor": false,
-      "layers.acceleration.disabled": true,
+      "layers.acceleration.disabled": !gpuReady,
       "layers.gpu-process.enabled": false,
       "network.process.enabled": false,
       "browser.tabs.remote.autostart": false,
@@ -85,6 +96,9 @@ function restoreOrbisFoxPreferences(Cc,Ci,profile,host) {
       "media.ffmpeg.enabled": false,
       // Prefer VP9/Opus for this CPU-rendered first playback implementation.
       "media.av1.enabled": false,
+      // A 64-bit address space does not imply a desktop-sized flexible pool.
+      // Only unused shared image mappings expire; visible images stay owned.
+      "image.mem.shared.unmap.force-enabled": true,
       "javascript.options.baselinejit": host.nativeJitReady===true,
       "javascript.options.native_regexp": host.nativeJitReady===true,
       "javascript.options.ion": false,
@@ -95,11 +109,21 @@ function restoreOrbisFoxPreferences(Cc,Ci,profile,host) {
     // Content/chrome DOM at30Hz; independent native cursor/menu stays60Hz.
     prefs.setIntPref("layout.frame_rate", 30);
     prefs.setIntPref("layout.throttled_frame_rate", 1);
+    // Desktop defaults allow a ~2 GiB decoded-image cache and 60s retention.
+    // Keep caches useful but bounded below the console's constrained mapping
+    // pool. Eviction uses Gecko's real discard/remap and history mechanisms.
+    prefs.setIntPref("image.mem.surfacecache.max_size_kb", 48 * 1024);
+    prefs.setIntPref("image.mem.surfacecache.min_expiration_ms", 5000);
+    prefs.setIntPref("image.mem.shared.unmap.min_expiration_ms", 5000);
+    prefs.setIntPref("media.memory_caches_combined_limit_kb", 32 * 1024);
+    prefs.setIntPref("browser.sessionhistory.max_total_viewers", 1);
     io.manageOfflineStatus = false;
     io.offline = true;
     };
     const profile = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
-    profile.initWithPath("/data/orbisfox/gecko-profile");
+    const profilePath = getTrustedProfilePath(Cc, Ci);
+    Object.defineProperty(globalThis, "ORBISFOX_PROFILE_PATH", {value: profilePath, writable: false});
+    profile.initWithPath(profilePath);
     if (!profile.exists()) profile.create(Ci.nsIFile.DIRECTORY_TYPE, 0o700);
     directories = Cc["@mozilla.org/file/directory_service;1"].getService(Ci.nsIDirectoryService);
     provider = {
@@ -256,7 +280,7 @@ function restoreOrbisFoxPreferences(Cc,Ci,profile,host) {
         if (host.framesPresented && !rendererReported) {
           host.log("Gecko VideoOut: first published frame presented; software WebRender=" + host.softwareWebRender);
           rendererReported = true;
-          if (!host.softwareWebRender) host.log("ERROR: Gecko frame exists, but SWGL selection is not confirmed");
+          if (!host.softwareWebRender && host.nativeGpuReady!==true) host.log("ERROR: hardware frame without a successful native GPU gate");
         }
         if (!warned && Date.now() - started > 30000 && (!reported || !host.framesPresented)) {
           host.log("ERROR: 30-second bring-up timeout: DOM assertions=" + reported + "; presented frames=" + host.framesPresented);

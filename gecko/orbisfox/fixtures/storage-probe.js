@@ -5,7 +5,10 @@ function verifyTrustedPersistentStorage(Cc, Ci, host) {
   const value = "OrbisFox SQLite durable probe 🦊";
   const service = Cc["@mozilla.org/storage/service;1"].getService(Ci.mozIStorageService);
   const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
-  file.initWithPath("/data/orbisfox/gecko-profile/mozstorage-bringup.sqlite");
+  const profile = globalThis.ORBISFOX_PROFILE_PATH || "/data/orbisfox/gecko-profile";
+  if (profile !== "/data/orbisfox/gecko-profile" && profile !== "/data/orbisfox/mesa-profile")
+    throw new Error("Invalid trusted storage probe profile");
+  file.initWithPath(profile + "/mozstorage-bringup.sqlite");
   let connection = null;
   const read = () => {
     const statement = connection.createStatement("SELECT value FROM orbisfox_probe WHERE id = 1");

@@ -25,11 +25,15 @@ def build_errors(text):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--mesa', action='store_true', help='Explicit experimental native Mesa build')
     args = parser.parse_args()
     if not 1 <= args.jobs <= 16:
         parser.error('--jobs must be between 1 and 16')
     subprocess.run([sys.executable, str(ROOT / 'scripts/build-media-codecs.py'), '--jobs', str(args.jobs)], check=True)
-    subprocess.run([sys.executable, str(ROOT / 'scripts/configure-gecko-layout.py')], check=True)
+    if args.mesa:
+        subprocess.run([sys.executable, str(ROOT / 'scripts/build-orbis-mesa.py'), '--jobs', str(args.jobs)], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/configure-gecko-layout.py')] +
+                   (['--mesa'] if args.mesa else []), check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/fetch-layout-assets.py')], check=True)
     revision = (ROOT / 'build/rust/.abi-patch-revision').read_text()
     marker = BUILD / '.rust-sysroot-revision'
@@ -54,6 +58,7 @@ def main():
     text = log.read_text()
     errors = build_errors(text)
     report = {'stage': 'full Gecko cross-build', 'result': result.returncode,
+              'experimental_mesa': args.mesa,
               'log': str(log.relative_to(ROOT)),
               'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest(),
               'errors': errors[:40], 'in_working_package': False,

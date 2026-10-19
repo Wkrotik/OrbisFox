@@ -18,11 +18,13 @@ class RunLogsTests(unittest.TestCase):
                 #include <stddef.h>
                 #include <stdint.h>
                 #include <sys/time.h>
+                #include <sys/types.h>
                 typedef struct timeval OrbisKernelTimeval;
                 extern "C" {
                 int32_t sceKernelOpen(const char*,int,int);
                 int64_t sceKernelWrite(int,const void*,size_t);
                 int64_t sceKernelRead(int,void*,size_t);
+                size_t sceKernelPwrite(int,const void*,size_t,off_t);
                 int32_t sceKernelClose(int);
                 int32_t sceKernelFsync(int);
                 int32_t sceKernelMkdir(const char*,int);
@@ -34,6 +36,7 @@ class RunLogsTests(unittest.TestCase):
             harness = work / 'harness.cpp'
             harness.write_text(textwrap.dedent('''
                 #include "orbisfox/run_logs.h"
+                #include "orbisfox/allocator_flight.h"
                 #include <orbis/libkernel.h>
                 #include <cassert>
                 #include <cerrno>
@@ -44,7 +47,8 @@ class RunLogsTests(unittest.TestCase):
                 #include <sys/stat.h>
                 #include <unistd.h>
                 static std::string root;
-                static bool failMkdir=false;
+                static bool failMkdir=false,failFlightWrite=false;
+                static size_t shortWrite=0;
                 static std::string path(const char* p){
                     const char* prefix="/data/orbisfox";
                     assert(!std::strncmp(p,prefix,std::strlen(prefix)));
@@ -54,6 +58,11 @@ class RunLogsTests(unittest.TestCase):
                 extern "C" int32_t sceKernelOpen(const char* p,int flags,int mode){return result(open(path(p).c_str(),flags,mode));}
                 extern "C" int64_t sceKernelWrite(int fd,const void* p,size_t n){return write(fd,p,n);}
                 extern "C" int64_t sceKernelRead(int fd,void* p,size_t n){return read(fd,p,n);}
+                extern "C" size_t sceKernelPwrite(int fd,const void* p,size_t n,off_t at){
+                    if(failFlightWrite){failFlightWrite=false;return size_t(-EIO);}
+                    if(shortWrite&&n>shortWrite)n=shortWrite;
+                    return size_t(pwrite(fd,p,n,at));
+                }
                 extern "C" int32_t sceKernelClose(int fd){return result(close(fd));}
                 extern "C" int32_t sceKernelFsync(int fd){return result(fsync(fd));}
                 extern "C" int32_t sceKernelMkdir(const char* p,int mode){if(failMkdir){errno=EIO;return result(-1);}return result(mkdir(path(p).c_str(),mode));}
@@ -70,14 +79,36 @@ class RunLogsTests(unittest.TestCase):
                     assert(!orbisfox::native_diagnostics_enabled());assert(access(root.c_str(),F_OK)!=0);
                     assert(!strcmp(orbisfox::NativeRunLogPath("startup-layout.log").c_str(),"/dev/null"));
                     assert(!orbisfox::native_write_heap_audit("not recorded",12));
+                    orbisfox::AllocatorFlightEvent events[3]{};
+                    assert(!orbisfox::native_write_allocator_flight(events,3,0,false));
                     assert(orbisfox::set_native_diagnostics_enabled(true));assert(orbisfox::native_diagnostics_enabled());
                     const auto generation=orbisfox::native_diagnostics_generation();
                     const std::string first=orbisfox::native_run_log_directory();
+                    const std::string flight=path((first+"/allocator-flight.bin").c_str());
+                    assert(access(flight.c_str(),F_OK)!=0); // Lazy, not an OFF-side effect.
+                    for(unsigned i=0;i<3;++i){events[i].sequence=orbisfox::allocatorFlightCapacity+i;
+                        events[i].phase=2;events[i].checksum=orbisfox::allocator_flight_checksum(events[i]);}
+                    shortWrite=17; // Complete-write loops across circular wrap.
+                    assert(orbisfox::native_write_allocator_flight(events,3,generation,true));shortWrite=0;
+                    struct stat flightStat{};assert(stat(flight.c_str(),&flightStat)==0);
+                    assert(flightStat.st_size==64+orbisfox::allocatorFlightCapacity*64);
+                    int flightInput=open(flight.c_str(),O_RDONLY);assert(flightInput>=0);uint64_t header[8]{};
+                    assert(pread(flightInput,header,64,0)==64);assert(header[0]==orbisfox::allocatorFlightMagic);
+                    assert(header[4]==orbisfox::allocatorFlightCapacity+2&&header[6]==0);
+                    orbisfox::AllocatorFlightEvent written{};assert(pread(flightInput,&written,64,64)==64);
+                    assert(written.sequence==orbisfox::allocatorFlightCapacity+1);
+                    assert(written.checksum==orbisfox::allocator_flight_checksum(written));
+                    events[0].sequence+=3;events[0].checksum=orbisfox::allocator_flight_checksum(events[0]);
+                    failFlightWrite=true;assert(!orbisfox::native_write_allocator_flight(events,1,generation,true));
+                    assert(pread(flightInput,header,64,0)==64);assert(header[4]==orbisfox::allocatorFlightCapacity+2);
+                    assert(header[6]==1&&header[7]==orbisfox::allocatorFlightCapacity+3);close(flightInput);
+                    assert(!orbisfox::native_write_allocator_flight(events,1,generation+1,true));
                     orbisfox::NativeRunLogPath log("startup-layout.log");
                     int fd=sceKernelOpen(log.c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);assert(fd>=0);
                     assert(sceKernelWrite(fd,"first-run-evidence",18)==18);assert(sceKernelClose(fd)==0);
                     assert(orbisfox::initialize_native_run_logs());
                     assert(first!=orbisfox::native_run_log_directory());
+                    assert(!orbisfox::native_write_allocator_flight(events,1,generation,true));
                     fd=sceKernelOpen((first+"/startup-layout.log").c_str(),O_RDONLY,0);assert(fd>=0);
                     char data[32]{};assert(read(fd,data,sizeof(data))==18);assert(!strcmp(data,"first-run-evidence"));close(fd);
                     assert(orbisfox::native_diagnostics_generation()>generation);

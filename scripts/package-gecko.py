@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import runpy
 from pathlib import Path
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ COMMON_DIALOG_ATTRIBUTE_SYSTEM = 0x20
 spec = importlib.util.spec_from_file_location('baseline_packaging', ROOT / 'scripts/package.py')
 PKG = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PKG)
+IDENTITY = runpy.run_path(str(ROOT / 'scripts/gecko-package-identity.py'))
 
 
 def stage_resources(source, target):
@@ -147,11 +149,17 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--resource-format', choices=('unpacked', 'omni'), default='unpacked',
                         help='omni is an opt-in packaging-only trial; console validation pending')
+    parser.add_argument('--mesa', action='store_true', help='Separate experimental title, installer and profile')
     args = parser.parse_args(argv)
+    identity = IDENTITY['package_identity'](args.mesa)
     app = json.loads((BUILD / 'build-report.json').read_text())
     if (app.get('version') != VERSION or not app.get('final_engine_application_linked')
             or not app.get('baseline_unchanged') or not app.get('upstream_static_nss_closure_verified')):
         raise RuntimeError('Verified native final link required')
+    if bool(app.get('experimental_native_mesa')) != args.mesa:
+        raise RuntimeError('Package flavor does not match native Mesa build')
+    if args.mesa and not app.get('experimental_native_mesa_final_link_verified'):
+        raise RuntimeError('Verified native Mesa implementation required')
     native_elf = BUILD / 'orbisfox.elf'
     if (native_elf.stat().st_size != app['executable']['bytes']
             or hashlib.sha256(native_elf.read_bytes()).hexdigest() != app['executable']['sha256']):
@@ -187,14 +195,15 @@ def main(argv=None):
     run('create-fself', f'-in={BUILD / "orbisfox.elf"}', f'-out={BUILD / "orbisfox.oelf"}',
         '--eboot', 'eboot.bin', '--paid', '0x3800000000000035', '--authinfo', PKG.AUTHINFO)
     sections = PKG.verify_oelf(BUILD / 'orbisfox.oelf')
+    self_metadata = PKG.verify_self(stage / 'eboot.bin', PKG.AUTHINFO, 0x3800000000000035)
     sfo = 'sce_sys/param.sfo'
     run('PkgTool.Core', 'sfo_new', sfo)
     entries = {
         'APP_TYPE': ('Integer', 4, '1'), 'APP_VER': ('Utf8', 8, VERSION),
         'ATTRIBUTE': ('Integer', 4, str(COMMON_DIALOG_ATTRIBUTE_SYSTEM)), 'CATEGORY': ('Utf8', 4, 'gd'),
-        'FORMAT': ('Utf8', 4, 'obs'), 'CONTENT_ID': ('Utf8', 48, PKG.CONTENT_ID),
+        'FORMAT': ('Utf8', 4, 'obs'), 'CONTENT_ID': ('Utf8', 48, identity['content_id']),
         'DOWNLOAD_DATA_SIZE': ('Integer', 4, '0'), 'SYSTEM_VER': ('Integer', 4, '1020'),
-        'TITLE': ('Utf8', 128, 'OrbisFox'), 'TITLE_ID': ('Utf8', 12, PKG.TITLE_ID),
+        'TITLE': ('Utf8', 128, identity['title']), 'TITLE_ID': ('Utf8', 12, identity['title_id']),
         'VERSION': ('Utf8', 8, VERSION),
     }
     for key, (kind, size, value) in entries.items():
@@ -249,6 +258,10 @@ def main(argv=None):
         'build-media-codecs.py': ROOT / 'scripts/build-media-codecs.py',
     }
     licenses.update(codec_sources)
+    mesa_materials = None
+    if args.mesa:
+        material = runpy.run_path(str(ROOT / 'scripts/stage-mesa-materials.py'))
+        mesa_materials = material['stage_mesa_materials'](stage / 'assets/misc/mesa', app['experimental_native_mesa'])
     for name, source in licenses.items():
         target = stage / 'assets/misc' / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -257,19 +270,23 @@ def main(argv=None):
     files = sorted(item.relative_to(stage).as_posix() for item in stage.rglob('*') if item.is_file())
     if any(any(character.isspace() for character in name) for name in files):
         raise ValueError('Package path contains whitespace')
-    run('create-gp4', '-out', 'project.gp4', f'--content-id={PKG.CONTENT_ID}',
+    run('create-gp4', '-out', 'project.gp4', f'--content-id={identity["content_id"]}',
         '--files', 'eboot.bin sce_sys/param.sfo')
     complete_gp4(stage / 'project.gp4', files)
     run('PkgTool.Core', 'pkg_build', 'project.gp4', DIST)
-    artifact = DIST / 'OrbisFox.pkg'
-    (DIST / (PKG.CONTENT_ID + '.pkg')).replace(artifact)
+    artifact = DIST / identity['package_name']
+    (DIST / (identity['content_id'] + '.pkg')).replace(artifact)
     run('PkgTool.Core', 'pkg_validate', artifact)
     shutil.copyfile(BUILD / 'orbisfox.elf', DIST / 'orbisfox.elf')
     unchanged = preserved_baseline_digest() == baseline
     if not unchanged:
         raise RuntimeError('Preserved 0.11 changed unexpectedly')
     report = {
-        'title': 'OrbisFox', 'version': VERSION, 'package': str(artifact.relative_to(ROOT)),
+        'title': identity['title'], 'version': VERSION, 'package': str(artifact.relative_to(ROOT)),
+        'experimental_mesa': args.mesa, 'package_identity': identity,
+        'mesa_dependency_materials': mesa_materials,
+        'binary_redistribution_signoff': False,
+        'self_authentication_metadata_verified': self_metadata,
         'bytes': artifact.stat().st_size, 'sha256': hashlib.sha256(artifact.read_bytes()).hexdigest(),
         'gecko_revision': PKG.SWGL_REVISION, 'native_full_gecko_linked': True,
         'native_executable': app['executable'],

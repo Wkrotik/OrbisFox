@@ -6,6 +6,9 @@ function initializeOrbisFoxShell() {
   // dirtying chrome/layout/compositor on every16ms supervisory timer tick.
   const text=(element,value)=>{if(element.textContent!==value)element.textContent=value;};
   const attribute=(element,name,value)=>{if(element.getAttribute(name)!==value)element.setAttribute(name,value);};
+  // Reflected DOM properties also dirty attributes/layout, even for identical
+  // values. The supervisor ticks at 30Hz; unchanged chrome must stay clean.
+  const property=(element,name,value)=>{if(element[name]!==value)element[name]=value;};
   const fallbackIcon='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"%3E%3Ccircle cx="10" cy="10" r="8" fill="none" stroke="%2396a3ba"/%3E%3Cpath d="M2 10h16M10 2c-5 4-5 12 0 16 5-4 5-12 0-16" fill="none" stroke="%2396a3ba"/%3E%3C/svg%3E';
   const setIcon=(img,url,data=null)=>{
     if(!img.dataset.iconBound){img.dataset.iconBound='true';img.addEventListener('error',()=>{const failed=img.getAttribute('src');if(failed!==fallbackIcon){img.dataset.failedIcon=failed;img.setAttribute('src',fallbackIcon);}});}
@@ -274,10 +277,10 @@ function initializeOrbisFoxShell() {
             container.appendChild(button);container.appendChild(close);$("tab-buttons").appendChild(container);label={container,button,title,dot,close};
           }labels.set(tab.id,label);
         }
-        label.close.disabled=tabs.length<=1;setIcon(label.dot,tab.location,tab.favicon);text(label.title,tab.title||"Untitled");if(label.dot.dataset.busy!==String(!!tab.busy))label.dot.dataset.busy=String(!!tab.busy);attribute(label.button,"aria-selected",String(tab.id===active));
+        property(label.close,'disabled',tabs.length<=1);setIcon(label.dot,tab.location,tab.favicon);text(label.title,tab.title||"Untitled");if(label.dot.dataset.busy!==String(!!tab.busy))label.dot.dataset.busy=String(!!tab.busy);attribute(label.button,"aria-selected",String(tab.id===active));
       }
-      $("new-tab").disabled=tabs.length>=OrbisFoxShellModel.MAX_TABS;
-      $("close-tab").disabled=tabs.length<=1;
+      property($("new-tab"),'disabled',tabs.length>=OrbisFoxShellModel.MAX_TABS);
+      property($("close-tab"),'disabled',tabs.length<=1);
     },
     nativeChromeScene(){
       if(!actions||!labels.has(selected))return null;
@@ -329,24 +332,24 @@ function initializeOrbisFoxShell() {
       else if(name==="previousTab"||name==="nextTab"){if(!api.isEditing()){actions?.relativeTab(name==="previousTab"?-1:1);page();}}
     },
     update(state,diagnostics,gates){
-      latest=state;homeVisible=state.location===OrbisFoxShellModel.HOME;$("home-screen").hidden=!homeVisible;
-      $("home-go").disabled=!gates.web;$("home-search").disabled=!gates.web;
-      $("bookmark-button").disabled=!gates.bookmarksAvailable||!/^https?:\/\//i.test(state.location);
+      latest=state;homeVisible=state.location===OrbisFoxShellModel.HOME;property($("home-screen"),'hidden',!homeVisible);
+      property($("home-go"),'disabled',!gates.web);property($("home-search"),'disabled',!gates.web);
+      property($("bookmark-button"),'disabled',!gates.bookmarksAvailable||!/^https?:\/\//i.test(state.location));
       if(webReady!==!!gates.web){webReady=!!gates.web;for(const list of [$("bookmark-list"),$("recent-list")])for(const button of list.querySelectorAll("button"))button.disabled=!webReady;}
       renderBookmarks();renderHistory();renderLibrary();
       const revision=actions?.faviconRevision?.()??0;if(revision!==lastIconRevision){lastIconRevision=revision;for(const image of document.querySelectorAll('.site-icon'))setIcon(image,image.dataset.site);}
-      const bookmarked=bookmarkItems.some(item=>item.url===state.location);attribute($("bookmark-button"),'aria-pressed',String(bookmarked));attribute($("bookmark-button"),'aria-label',bookmarked?'Remove this bookmark':'Bookmark this page');$("bookmark-button").title=bookmarked?'Remove this bookmark':'Bookmark this page';
+      const bookmarked=bookmarkItems.some(item=>item.url===state.location);attribute($("bookmark-button"),'aria-pressed',String(bookmarked));attribute($("bookmark-button"),'aria-label',bookmarked?'Remove this bookmark':'Bookmark this page');property($("bookmark-button"),'title',bookmarked?'Remove this bookmark':'Bookmark this page');
       text($("zoom-value"),(actions.zoomValue?.()||100)+'%');
-      $("back").disabled=!state.canBack;$("forward").disabled=!state.canForward;
-      if($("reload").dataset.busy!==String(!!state.busy))$("reload").dataset.busy=String(!!state.busy);$("reload").title=state.busy?"Stop":"Reload";attribute($("reload"),"aria-label",state.busy?"Stop":"Reload");
-      if(!api.isEditing()&&document.activeElement!==$("address"))$("address").value=homeVisible?"":state.location;
+      property($("back"),'disabled',!state.canBack);property($("forward"),'disabled',!state.canForward);
+      if($("reload").dataset.busy!==String(!!state.busy))$("reload").dataset.busy=String(!!state.busy);property($("reload"),'title',state.busy?"Stop":"Reload");attribute($("reload"),"aria-label",state.busy?"Stop":"Reload");
+      if(!api.isEditing()&&document.activeElement!==$("address"))property($("address"),'value',homeVisible?"":state.location);
       // "" means unknown: no lock is claimed without Gecko/TLS evidence.
       const security=homeVisible?"local":typeof state.security==="string"?state.security:state.location.startsWith("http:")?"insecure":state.location.startsWith("https:")?"":"local";
       attribute($("site-identity"),"data-security",security);text($("security"),SECURITY_LABELS[security]??"");
       attribute($("site-identity"),"aria-label",security==="secure"?"Secure connection — site information":security==="insecure"||security==="broken"?"Connection not secure — site information":"Site information");
       if(lastStatusMessage!==state.message){lastStatusMessage=state.message;if(/^(Found:|Not found:)/.test(state.message))statusUntil=Date.now()+3000;}
       if(!$("fullscreen-notice").hidden&&Date.now()>=fullscreenNoticeUntil){$("fullscreen-notice").hidePopover?.();$("fullscreen-notice").hidden=true;}
-      $("browser-footer").hidden=fullscreen||!(state.busy||state.error||Date.now()<statusUntil);text($("status"),state.message);if($("status").dataset.error!==String(!!state.error))$("status").dataset.error=String(!!state.error);
+      property($("browser-footer"),'hidden',fullscreen||!(state.busy||state.error||Date.now()<statusUntil));text($("status"),state.message);if($("status").dataset.error!==String(!!state.error))$("status").dataset.error=String(!!state.error);
       text($("diagnostic-text"),diagnostics);
       if(clearConfirmUntil&&Date.now()>=clearConfirmUntil){clearConfirmUntil=0;if(!$("settings-panel").hidden){renderSettings();text($("settings-status"),"Changes are saved automatically.");}}
       if(!$("site-panel").hidden)renderSiteInfo();

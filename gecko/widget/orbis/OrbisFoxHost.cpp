@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "OrbisFoxHost.h"
+#include "OrbisGfxInfo.h"
 #include "OrbisCompositorWidget.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/orbisfox/OrbisExecutableMemory.h"
@@ -33,6 +34,13 @@ NS_IMETHODIMP OrbisFoxHost::GetNativeJitReady(bool* aReady) {
   NS_ENSURE_ARG_POINTER(aReady);
   NS_ENSURE_TRUE(NS_IsMainThread(), NS_ERROR_NOT_SAME_THREAD);
   *aReady = orbisfox::orbis_jit_memory_stats().ready;
+  return NS_OK;
+}
+
+NS_IMETHODIMP OrbisFoxHost::GetNativeGpuReady(bool* aReady) {
+  NS_ENSURE_ARG_POINTER(aReady);
+  NS_ENSURE_TRUE(NS_IsMainThread(), NS_ERROR_NOT_SAME_THREAD);
+  *aReady = IsOrbisMesaGpuReady();
   return NS_OK;
 }
 

@@ -31,6 +31,18 @@ class RetainedRunTests(unittest.TestCase):
             self.assertEqual((Path(directory)/'runs/run-2/startup-layout.log').read_bytes(),b'evidence2')
             self.assertFalse((Path(directory)/'runs/run-3').exists())
 
+    def test_flight_trace_is_collected_only_from_matching_owned_run(self):
+        base='/data/orbisfox/runs/run-1'
+        files={base+'/run-meta.json':b'{"run_id":"run-1","version":"0.68"}',
+               base+'/allocator-flight.bin':b'binary metadata',
+               '/data/orbisfox/allocator-flight.bin':b'not proven to belong to this launch'}
+        with tempfile.TemporaryDirectory() as directory:
+            out=Path(directory);records=FETCH.fetch_runs(FilesFTP(files),'0.68',out)
+            self.assertEqual(len(records),2)
+            self.assertEqual((out/'runs/run-1/allocator-flight.bin').read_bytes(),b'binary metadata')
+            self.assertFalse((out/'allocator-flight.bin').exists())
+            self.assertEqual(next(r for r in records if r['remote'].endswith('allocator-flight.bin'))['bytes'],15)
+
     def test_mismatched_run_metadata_rejected(self):
         files={'/data/orbisfox/runs/run-1/run-meta.json':b'{"run_id":"run-2","version":"0.52"}'}
         with tempfile.TemporaryDirectory() as directory:

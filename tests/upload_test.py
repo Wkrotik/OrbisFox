@@ -85,6 +85,39 @@ class UploadTests(unittest.TestCase):
         self.assertLess(ftp.events.index(('verify', '.' + name + '.uploading')),
                         ftp.events.index(('delete', upload.LEGACY_MAIN_PACKAGE)))
 
+    def test_mesa_upload_preserves_working_browser_and_other_installers(self):
+        name = 'OrbisFox-Mesa.pkg'
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / name
+            path.write_bytes(b'new experimental Mesa')
+            ftp = FakeFTP(name)
+            protected = {upload.PACKAGE_NAMES[0]: b'working browser',
+                         upload.PACKAGE_NAMES[1]: b'working diagnostic',
+                         upload.LEGACY_MAIN_PACKAGE: b'historical installer'}
+            ftp.files.update(protected)
+            upload.upload_packages(ftp, [path])
+        for key, value in protected.items():
+            self.assertEqual(ftp.files[key], value)
+            self.assertNotIn(('delete', key), ftp.events)
+        self.assertEqual(ftp.files[name], b'new experimental Mesa')
+
+    def test_shared_memory_probe_preserves_all_browser_installers(self):
+        name = upload.SHARED_MEMORY_PROBE_PACKAGE
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / name
+            path.write_bytes(b'separate diagnostic')
+            ftp = FakeFTP(name)
+            protected = {key: b'protected' for key in
+                         (*upload.PACKAGE_NAMES[:3], upload.LEGACY_MAIN_PACKAGE)}
+            ftp.files.update(protected)
+            upload.upload_packages(ftp, [path])
+        for key, value in protected.items():
+            self.assertEqual(ftp.files[key], value)
+            self.assertNotIn(('delete', key), ftp.events)
+        self.assertEqual(ftp.files[name], b'separate diagnostic')
+        self.assertLess(ftp.events.index(('verify', '.' + name + '.uploading')),
+                        ftp.events.index(('delete', name)))
+
     def test_resume_verifies_complete_file_before_replacement(self):
         name = upload.PACKAGE_NAMES[0]
         temporary = '.' + name + '.uploading'

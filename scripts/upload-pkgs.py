@@ -5,14 +5,49 @@ from ftplib import FTP
 import hashlib
 import json
 import os
+import runpy
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
+SHARED_MEMORY_PROBE_PACKAGE = 'IV0000-SHMP00001_00-SHMEMPROBE000001.pkg'
 PACKAGE_NAMES = (
     'OrbisFox.pkg',
     'IV0000-ORBV00001_00-ORBISFOXVIDEO000.pkg',
+    'OrbisFox-Mesa.pkg',
+    SHARED_MEMORY_PROBE_PACKAGE,
 )
 LEGACY_MAIN_PACKAGE = 'IV0000-ORBF00001_00-ORBISFOXPROBE000.pkg'
+
+
+def shared_memory_probe_candidate(root=ROOT):
+    root = Path(root).resolve()
+    report = json.loads((root / 'build/shared-memory-probe/build-report.json').read_text())
+    package = report['package']
+    if (report.get('native_linked') is not True or package.get('title_id') != 'SHMP00001'
+            or package.get('content_id') != 'IV0000-SHMP00001_00-SHMEMPROBE000001'
+            or package.get('extracted_sfo_verified') is not True
+            or set(package.get('extracted_files_verified', [])) !=
+               {'eboot.bin', 'sce_sys/param.sfo', 'sce_sys/icon0.png', 'source.tar.gz'}
+            or package.get('self') != {'authinfo_bytes': 136, 'paid': '0x3800000000000035',
+                                       'signature_verified': True}
+            or not isinstance(package.get('sections_verified'), int) or package['sections_verified'] <= 0):
+        raise ValueError('Shared-memory probe verification incomplete')
+    expected = {'package': 'build/shared-memory-probe/' + SHARED_MEMORY_PROBE_PACKAGE,
+                'elf': 'build/shared-memory-probe/shared-memory-probe.elf'}
+    for kind, name in expected.items():
+        artifact = package if kind == 'package' else report['elf']
+        path = root / name
+        if (artifact['file'] != name or path.is_symlink() or path.stat().st_size != artifact['bytes']
+                or hashlib.sha256(path.read_bytes()).hexdigest() != artifact['sha256']):
+            raise ValueError('Shared-memory probe artifact mismatch: ' + kind)
+    if not report.get('sources'):
+        raise ValueError('Shared-memory probe lacks source fingerprints')
+    for name, digest in report['sources'].items():
+        path = (root / name).resolve()
+        if (Path(name).is_absolute() or not path.is_relative_to(root)
+                or hashlib.sha256(path.read_bytes()).hexdigest() != digest):
+            raise ValueError('Shared-memory probe source changed: ' + name)
+    return report
 
 
 def upload_packages(ftp, files, directory='/data/pkg', resume=False):
@@ -69,12 +104,19 @@ def main():
     parser.add_argument('--user', default='anonymous')
     parser.add_argument('--include-diagnostics', action='store_true',
                         help='Also upload the optional VideoOut diagnostic; requires make pkg-videoout')
+    parser.add_argument('--shared-memory-probe', action='store_true',
+                        help='Upload only the separately verified SHMP00001 diagnostic installer')
     parser.add_argument('--gecko', action='store_true',
                         help='Upload the separately verified 0.48 native bounded popup-provider full-Gecko test package')
     parser.add_argument('--resume', action='store_true',
                         help='Resume a partial hidden upload using FTP REST, then verify the entire file')
     args = parser.parse_args()
     source = ROOT / 'dist'
+    if args.shared_memory_probe:
+        if args.gecko or args.include_diagnostics:
+            parser.error('--shared-memory-probe cannot be combined with other installer choices')
+        shared_memory_probe_candidate()
+        source = ROOT / 'build/shared-memory-probe'
     if args.gecko:
         if args.include_diagnostics:
             parser.error('--gecko cannot be combined with --include-diagnostics')
@@ -84,12 +126,17 @@ def main():
                     'extracted_payload_verified', 'extracted_sfo_verified')
         if not all(report.get(field) is True for field in required):
             raise ValueError('Full-Gecko package has not passed all local deployment gates')
-        if hashlib.sha256((source / PACKAGE_NAMES[0]).read_bytes()).hexdigest() != report['sha256']:
+        identity = runpy.run_path(str(ROOT / 'scripts/gecko-package-identity.py'))['report_identity'](report)
+        if hashlib.sha256((source / identity['package_name']).read_bytes()).hexdigest() != report['sha256']:
             raise ValueError('Full-Gecko package hash differs from its verified report')
     with FTP() as ftp:
         ftp.connect(args.host, args.port, timeout=30)
         ftp.login(args.user, os.environ.get('PS4_FTP_PASSWORD', 'anonymous@'))
-        names = PACKAGE_NAMES if args.include_diagnostics else PACKAGE_NAMES[:1]
+        names = PACKAGE_NAMES[:2] if args.include_diagnostics else PACKAGE_NAMES[:1]
+        if args.gecko:
+            names = (identity['package_name'],)
+        if args.shared_memory_probe:
+            names = (SHARED_MEMORY_PROBE_PACKAGE,)
         upload_packages(ftp, [source / name for name in names], args.directory, resume=args.resume)
 
 

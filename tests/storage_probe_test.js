@@ -2,7 +2,7 @@
 // Verifies sequencing/error gates only, not real SQLite, persistence or firmware.
 const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync('gecko/orbisfox/fixtures/storage-probe.js', 'utf8');
-function run(failure = '') {
+function run(failure = '', profile = '/data/orbisfox/gecko-profile') {
   const trace = [], logs = [];
   let opens = 0, reads = 0, closes = 0, finalizes = 0, row = 'OrbisFox SQLite durable probe 🦊', previous = row;
   const execute = sql => {
@@ -13,7 +13,7 @@ function run(failure = '') {
     if (sql === 'ROLLBACK') row = previous;
   };
   const service = {openUnsharedDatabase(file) {
-    ++opens; assert.equal(file.path, '/data/orbisfox/gecko-profile/mozstorage-bringup.sqlite');
+    ++opens; assert.equal(file.path, profile + '/mozstorage-bringup.sqlite');
     if (failure === 'open') throw Error('VFS unavailable');
     return {executeSimpleSQL: execute,
       createStatement(sql) {
@@ -28,13 +28,15 @@ function run(failure = '') {
   const Cc = {'@mozilla.org/storage/service;1': {getService() {
     if (failure === 'service') throw Error('Storage initialization failed'); return service;
   }}, '@mozilla.org/file/local;1': {createInstance() {return {initWithPath(path) {this.path = path;}};}}};
-  const context = {}; vm.runInNewContext(source, context);
+  const context = {ORBISFOX_PROFILE_PATH: profile}; vm.runInNewContext(source, context);
   let result = false, error;
   try {result = context.verifyTrustedPersistentStorage(Cc, {}, {log(message) {logs.push(message);}});}
   catch (failure) {error = failure;}
   return {result, error, trace, logs, opens, closes, reads, finalizes};
 }
 for (let cycle = 0; cycle < 32; ++cycle) {
+  assert(run('', '/data/orbisfox/mesa-profile').result);
+  assert(run('', '/data/elsewhere').error);
   const good = run(); assert(good.result); assert(!good.error);
   assert.equal(good.opens, 2); assert.equal(good.closes, 2); assert.equal(good.reads, 3); assert.equal(good.finalizes, 3);
   assert.deepEqual(good.trace.map(s => s.split(' ')[0]), ['CREATE', 'BEGIN', 'INSERT', 'COMMIT', 'BEGIN', 'UPDATE', 'ROLLBACK']);

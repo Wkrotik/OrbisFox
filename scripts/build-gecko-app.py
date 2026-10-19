@@ -46,16 +46,117 @@ def fingerprint(path, *, optional=False):
             'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def mesa_link_inputs(runtime):
+    directory = ROOT / 'build/orbis-mesa'
+    report = json.loads((directory / 'build-report.json').read_text())
+    if report.get('producer_sha256') != hashlib.sha256((ROOT / 'scripts/build-orbis-mesa.py').read_bytes()).hexdigest():
+        raise RuntimeError('Mesa closure was not produced by the current canonical producer')
+    if report.get('offscreen_only') is not True:
+        raise RuntimeError('Mesa window/scanout ownership must be excluded from this browser closure')
+    if not report.get('native_build_completed') or report.get('orbis_compat_runtime_archive_linked') is not False:
+        raise RuntimeError('Mesa runtime closure is incomplete or contains forbidden compatibility interposition')
+    for name, digest in report['private_runtime_archives'].items():
+        if name not in ('libc++.a', 'libc++abi.a', 'libunwind.a') or hashlib.sha256((runtime / name).read_bytes()).hexdigest() != digest:
+            raise RuntimeError('Mesa/browser private C++ runtime mismatch')
+    if set(report['private_runtime_archives']) != {'libc++.a', 'libc++abi.a', 'libunwind.a'}:
+        raise RuntimeError('Incomplete Mesa private runtime binding')
+    if len(report['archives']) != 14 or sum(bool(item['whole_archive']) for item in report['archives']) != 1:
+        raise RuntimeError('Pinned native Mesa closure inventory changed')
+    for item in report['archives']:
+        path = (ROOT / item['path']).resolve()
+        if not path.is_relative_to(directory) or fingerprint(path)['sha256'] != item['sha256']:
+            raise RuntimeError('Mesa archive path/hash binding changed')
+        if item['whole_archive'] and path.name != 'libvulkan_radeon.a':
+            raise RuntimeError('Only the real RADV ICD may be forced whole')
+    bridge = report.get('runtime_bridge', {})
+    source_names = {'src/ps4/mesa_runtime_bridge.cpp', 'src/ps4/mesa_gnm_stubs.S',
+                    'include/orbisfox/mesa_binding.h', 'include/orbisfox/mesa_gnm_symbols.inc'}
+    if set(bridge.get('sources', {})) != source_names or any(
+            hashlib.sha256((ROOT/name).read_bytes()).hexdigest() != digest
+            for name, digest in bridge['sources'].items()):
+        raise RuntimeError('Mesa common runtime bridge source binding changed')
+    bridge_paths = []
+    expected_objects = {directory/'runtime/mesa_runtime_bridge.o', directory/'runtime/mesa_gnm_stubs.o'}
+    for item in bridge.get('objects', []):
+        path = (ROOT/item['path']).resolve()
+        if path not in expected_objects or fingerprint(path)['sha256'] != item['sha256']:
+            raise RuntimeError('Mesa common runtime bridge object binding changed')
+        bridge_paths.append(str(path))
+    if len(bridge_paths) != 2 or set(map(Path, bridge_paths)) != expected_objects:
+        raise RuntimeError('Incomplete Mesa common runtime bridge')
+    forced = next(item for item in report['archives'] if item['whole_archive'])
+    paths = [str((ROOT / item['path']).resolve()) for item in report['archives'] if not item['whole_archive']]
+    tokens = ['--start-group', *bridge_paths, '--whole-archive', str((ROOT / forced['path']).resolve()), '--no-whole-archive', *paths, '--end-group']
+    response = directory / 'link-inputs.rsp'
+    if fingerprint(response)['sha256'] != report['link_response_sha256']:
+        raise RuntimeError('Mesa engine link-response binding changed')
+    if shlex.split(response.read_text()) != tokens:
+        raise RuntimeError('Mesa response does not match verified archive inventory')
+    return report, tokens
+
+
+def verify_mesa_final_link(defined, demangled, mapping, dynamic, sdk):
+    """Require selected code, not unresolved names or an older software path."""
+    bodies = {p[-1]: int(p[0], 16) for line in defined.splitlines()
+              if len(p := line.split()) == 3 and p[-2] in ('t', 'T')}
+    required = {'eglGetProcAddress', 'eglInitialize', 'eglCreatePbufferSurface',
+                'radv_CreateInstance', '_mesa_GetString', 'orbis_sysconf',
+                'orbis_mesa_native_ready', 'orbis_mesa_gpu_ready'}
+    if not required <= bodies.keys():
+        raise RuntimeError('Mesa final ELF lacks actual implementation bodies: ' +
+                           ', '.join(sorted(required - bodies.keys())))
+    cpp_bodies = [p[2] for line in demangled.splitlines()
+                  if len(p := line.split(maxsplit=2)) == 3 and p[1] in ('t', 'T')]
+    cpp_required = ('mozilla::wr::RenderCompositorOrbis::Create(',
+                    'mozilla::wr::RenderCompositorOrbis::BeginFrame(',
+                    'mozilla::wr::RenderCompositorOrbis::EndFrame(',
+                    'mozilla::widget::OrbisCompositorWidget::PublishGpuFrame(',
+                    'mozilla::widget::OrbisFoxHost::GetNativeGpuReady(',
+                    'orbisfox::prepare_native_mesa(', 'orbisfox::probe_native_mesa_gpu(',
+                    'mozilla::wr::RenderCompositorSWGL::Create(')
+    for name in cpp_required:
+        if not any(symbol.startswith(name) for symbol in cpp_bodies):
+            raise RuntimeError('Mesa final ELF lacks GPU adapter/gate or software fallback: ' + name)
+    if 'liborbis-compat.a' in mapping or 'configure-sysconf.a' in mapping:
+        raise RuntimeError('Forbidden Mesa runtime interposition/configure archive selected')
+    sdk_owners = {}
+    for name in ('regcomp', 'regexec', 'mbtowc', 'mbrtowc', 'wcslen'):
+        owner = str(sdk / 'lib/libc.a') + '(' + name + '.lo):(.text.' + name + ')'
+        # Require the section at the actual public symbol's address; merely
+        # retaining a similarly named SDK object elsewhere is insufficient.
+        selected = any(len(p := line.split(maxsplit=4)) == 5 and p[4] == owner
+                       and int(p[0], 16) == bodies.get(name) and int(p[2], 16) > 0
+                       for line in mapping.splitlines())
+        if not selected:
+            raise RuntimeError('Mesa SDK regex/wide ABI owner is not proven: ' + name)
+        sdk_owners[name] = owner
+    imports = {p[7] for line in dynamic.splitlines()
+               if len(p := line.split()) == 8 and p[4] == 'GLOBAL' and p[6] == 'UND'}
+    if any(name.startswith(('sceVideoOut', 'sceGnm')) for name in imports):
+        raise RuntimeError('Mesa must not add startup GPU service imports')
+    return {'actual_c_implementation_bodies': sorted(required),
+            'gpu_adapter_and_software_fallback_bodies': list(cpp_required),
+            'sdk_regex_and_wide_selected_owners': sdk_owners,
+            'startup_gpu_service_imports': [], 'console_tested': False,
+            'browser_gpu_frames_observed': False}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--skip-engine-build', action='store_true')
     parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--mesa', action='store_true', help='Explicit experimental native Mesa link')
     args = parser.parse_args()
     if not args.skip_engine_build:
-        run([sys.executable, ROOT / 'scripts/build-gecko-layout.py', '--jobs', args.jobs])
+        run([sys.executable, ROOT / 'scripts/build-gecko-layout.py', '--jobs', args.jobs] +
+            (['--mesa'] if args.mesa else []))
     engine_report = json.loads((ENGINE / 'build-report.json').read_text())
     if not engine_report.get('full_engine_linked'):
         raise RuntimeError('Strict full Gecko link must succeed before the application build')
+    engine_config = json.loads((ENGINE / 'config.status.json').read_text())
+    engine_mesa = bool(engine_config.get('defines', {}).get('MOZ_ORBIS_MESA', False))
+    if engine_mesa != args.mesa or bool(engine_report.get('experimental_mesa', False)) != args.mesa:
+        raise RuntimeError('Requested native Mesa mode does not match the actual configured/built engine')
     baseline = fingerprint(ROOT / 'dist/OrbisFox.pkg', optional=True)
     BUILD.mkdir(parents=True, exist_ok=True)
     sdk = Path(os.environ.get('OO_PS4_TOOLCHAIN', ROOT / '.deps/OpenOrbis/PS4Toolchain')).resolve()
@@ -68,6 +169,11 @@ def main():
                'src/ps4/modules.cpp', 'src/ps4/services.cpp', 'src/ps4/native_stat.cpp',
                'src/ps4/native_clock.cpp', 'src/ps4/native_cpu.cpp', 'src/ps4/native_fcntl.cpp', 'src/ps4/native_network.cpp', 'src/ps4/native_keyboard.cpp', 'src/ps4/native_stdio.cpp', 'src/ps4/native_allocator.cpp', 'src/ps4/native_jit.cpp', 'src/ps4/native_audio.cpp', 'src/ps4/videoout.cpp',
                'src/ps4/startup.cpp', 'src/ps4/run_logs.cpp', 'src/ps4/sdk_heap_memory.cpp', 'src/ps4/platform.cpp', 'src/ps4/rust_runtime.cpp']
+    mesa_report, mesa_inputs = (mesa_link_inputs(runtime) if args.mesa else (None, []))
+    if args.mesa:
+        flags += ['-DMOZ_ORBIS_MESA']
+        flags += ['-I' + str(ROOT / '.deps/mesa-ps4/include')]
+        sources += ['src/ps4/native_mesa.cpp', 'src/ps4/native_mesa_probe.cpp']
     # Expose only the copied SDK allocator's state symbol for read-only checks;
     # never patch allocator instructions, flags, or the pinned archive.
     import runpy
@@ -206,7 +312,7 @@ def main():
     inputs = BUILD / 'engine-inputs.rsp'
     inputs.write_text('\n'.join(shlex.quote(str(item)) for item in [*native, *xul]) + '\n' +
                       '--start-group\n' + '\n'.join(shlex.quote(str(item)) for item in [*archives, *support]) +
-                      '\n--end-group\n')
+                      '\n--end-group\n' + '\n'.join(shlex.quote(token) for token in mesa_inputs) + '\n')
     elf = BUILD / 'orbisfox.elf'
     # Drop only non-loadable DWARF at link time, not symbols or required inputs.
     # Materializing two giant debug ELFs before post-link strip can exhaust disk
@@ -218,6 +324,8 @@ def main():
                '-L' + str(runtime), '-L' + str(sdk / 'lib'), '-o', elf,
                sdk / 'lib/crt1.o', '@' + str(inputs),
                '-lc++', '-lc++abi', '-lunwind', '-lc', '-lkernel', '-lSceSysmodule', '-lSceNet']
+    if args.mesa:
+        command.append('--Map=' + str(BUILD / 'native-link.map'))
     report = {'stage': 'isolated native full Gecko executable', 'version': '0.68',
               'final_engine_application_linked': False, 'html_rendered': False,
               'hardware_tested': False, 'new_package_created': False,
@@ -227,6 +335,7 @@ def main():
                   for directory in ('gecko','src','include') for p in sorted((ROOT / directory).rglob('*'))
                   if p.is_file() and p.suffix != '.md' and '__pycache__' not in p.parts},
               'isolated_software_codecs': media_report,
+              'experimental_native_mesa': mesa_report,
               'upstream_static_nss_closure_verified': True,
               'native_nspr_static_linker_probe_implemented': True,
               'scope': 'Development browser with gated HTTP/HTTPS; no sandbox, production security or arbitrary-site stability certification'}
@@ -314,6 +423,13 @@ def main():
             raise ValueError('Actual pinned Gecko builtin trust anchors are missing')
         report['actual_pinned_builtin_trust_anchor_factory_defined'] = True
         demangled = subprocess.check_output(['llvm-nm', '-C', '--defined-only', str(elf)], text=True)
+        if args.mesa:
+            report['experimental_native_mesa_final_link_verified'] = verify_mesa_final_link(
+                all_defined, demangled, (BUILD / 'native-link.map').read_text(),
+                subprocess.check_output(['llvm-readelf', '--dyn-syms', '--wide', str(elf)], text=True), sdk)
+            report['experimental_native_mesa_final_link_verified']['link_map'] = fingerprint(BUILD / 'native-link.map')
+            report['experimental_native_mesa_final_link_verified']['original_sdk_libc_sha256'] = hashlib.sha256(
+                (sdk / 'lib/libc.a').read_bytes()).hexdigest()
         ui_names = ('orbisfox::NativeUiLoop::run()', 'orbisfox::NativeUiLoop::stop()',
                     'orbisfox::NativeUiLoop::publishFrame()', 'orbisfox::LatestUiFrame::read(')
         ui_code = '\n'.join(line for line in demangled.splitlines()

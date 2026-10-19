@@ -6,6 +6,15 @@ OrbisFox runs real Gecko HTML/CSS layout, SpiderMonkey JavaScript, NSS networkin
 Software WebRender and software audio/video decoding on PS4. It is not a wrapper
 around the system browser, a remote-rendering client or a reskinned diagnostic UI.
 
+## Development branch
+
+`dev` is an experimental development branch, not a release or stability promise.
+It retains the default-off [Mesa/WebRender experiment](docs/MESA_WEBRENDER.md),
+its diagnostic tools and host tests. The latest Mesa console candidate still
+crashes during startup; a passing host suite or native link does not establish
+console stability. New-SDK migration has not been implemented in this checkpoint.
+Use `main` and the published releases for the existing software-rendered baseline.
+
 ## Project status
 
 OrbisFox is an **early alpha for developers and testers**, not a polished or
