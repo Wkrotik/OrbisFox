@@ -177,8 +177,8 @@ def main():
                '--enable-orbis-homebrew-sdk' if native_sdk else '--disable-orbis-homebrew-sdk',
                '--enable-orbis-mesa' if args.mesa else '--disable-orbis-mesa']
     if native_sdk:
-        # Retaining prior ABI caches must not require another incremental tree.
-        command.append('--disable-cargo-incremental')
+        # Retain ABI caches; generic FreeBSD otherwise defaults the interpreter to -O1.
+        command.extend(['--disable-cargo-incremental', '--enable-optimize=-O2'])
     log = BUILD / 'configure-output.log'
     with log.open('w') as output:
         result = subprocess.run(command, cwd=BUILD, env=env,
@@ -194,6 +194,7 @@ def main():
               'experimental_mesa': args.mesa, 'sdk': args.sdk,
               'sdk_identity': sdk_identity, 'service_headers': service_headers,
               'result': result.returncode, 'command': command,
+              'optimization_flags': json.loads((BUILD / 'config.status.json').read_text())['substs']['MOZ_OPTIMIZE_FLAGS'] if result.returncode == 0 else [],
               'log': str(log.relative_to(ROOT)),
               'log_sha256': hashlib.sha256(log.read_bytes()).hexdigest(),
               'errors': errors[-8:], 'failure_tail': text.splitlines()[-30:] if result.returncode else [],

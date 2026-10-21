@@ -111,10 +111,22 @@ struct MonitorLogLock {
   explicit MonitorLogLock(NativeState& s):state(s){if(pthread_mutex_lock(&state.monitorLogMutex))__builtin_trap();}
   ~MonitorLogLock(){if(pthread_mutex_unlock(&state.monitorLogMutex))__builtin_trap();}
 };
+void writeCompletedTasks(FILE* output,const mozilla::widget::OrbisTaskDiagnostics& tasks,uint64_t& cursor) {
+  if(tasks.completedCount && tasks.completed[0].serial>cursor+1)
+    fprintf(output,"main-task-history lost=%llu; bounded history, inclusive nested times overlap\n",
+      (unsigned long long)(tasks.completed[0].serial-cursor-1));
+  for(unsigned i=0;i<tasks.completedCount;++i){
+    const auto& task=tasks.completed[i];if(task.serial<=cursor)continue;
+    fprintf(output,"main-task-complete id=%llu end-us=%llu inclusive-us=%llu depth=%u detailed=%d name=%s\n",
+      (unsigned long long)task.serial,(unsigned long long)task.ended,(unsigned long long)task.micros,
+      task.depth,task.detailed,task.name);
+    cursor=task.serial;
+  }
+}
 void* monitor(void* opaque) {
   auto& state = *static_cast<NativeState*>(opaque);
   FILE* output=nullptr;uint64_t outputGeneration=0;
-  uint64_t lastMissingGlyphDraws=0;
+  uint64_t lastMissingGlyphDraws=0,lastCompletedTask=0;
   FlexibleMemoryPressure pressure;
   uint64_t pressureSignals=0;
   for (unsigned sample = 0; !state.monitorStop.load(); ++sample) {
@@ -156,6 +168,9 @@ void* monitor(void* opaque) {
       (unsigned long long)ui.polls,(unsigned long long)ui.scanouts,(unsigned long long)ui.frameSerial,ui.x,ui.y,ui.failed,
       (unsigned long long)(ui.scanouts?ui.scanoutMicros/ui.scanouts:0),(unsigned long long)ui.maxScanoutMicros);
     const auto tasks=mozilla::widget::GetOrbisTaskDiagnostics();
+    // A new capture must not replay completions from before diagnostics opt-in.
+    if(newOutput)lastCompletedTask=tasks.completedSerial;
+    writeCompletedTasks(output,tasks,lastCompletedTask);
     const uint64_t taskNow=sceKernelGetProcessTime();
     fprintf(output,"main-task sample=%u depth=%u active-age-us=%llu events=%llu long-events=%llu last-us=%llu max-inclusive-us=%llu last-long-name=%s detail-us=%llu detail-name=%s\n",
       sample,tasks.depth,(unsigned long long)(tasks.activeStart&&taskNow>=tasks.activeStart?taskNow-tasks.activeStart:0),

@@ -12,6 +12,7 @@
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/Logging.h"
+#include <stdio.h>
 
 nsresult OrbisCreateVisibleBrowser(uint32_t, uint32_t, nsIWindowlessBrowser**,
                                    nsIWidget**, bool);
@@ -243,7 +244,11 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
   if (mKeyboardStatus == 1 && sCallbacks.pollKeyboard) {
     char16_t text[513]{};
     mKeyboardStatus = sCallbacks.pollKeyboard(sCallbacks.context, text, 513);
-    NS_ENSURE_TRUE(mKeyboardStatus >= 1 && mKeyboardStatus <= 4, NS_ERROR_UNEXPECTED);
+    if(mKeyboardStatus < 1 || mKeyboardStatus > 4){
+      char message[96];snprintf(message,sizeof(message),"Gecko pump failure: keyboard status=%u",unsigned(mKeyboardStatus));
+      if(sCallbacks.log)sCallbacks.log(sCallbacks.context,message);
+      return NS_ERROR_UNEXPECTED;
+    }
     if (mKeyboardStatus == 2) {
       size_t length = 0;
       while (length < 513 && text[length]) ++length;
@@ -327,14 +332,22 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
                        "Gecko pump: frame mailbox returned no surface");
   if (surface && sequence != mLastSequence) {
     const auto size = surface->GetSize();
-    NS_ENSURE_TRUE(size.width > 0 && size.height > 0 && size.width <= 1280 &&
-                  size.height <= 720 && surface->GetFormat() == gfx::SurfaceFormat::B8G8R8A8,
-                  NS_ERROR_UNEXPECTED);
+    if(!(size.width > 0 && size.height > 0 && size.width <= 1280 &&
+         size.height <= 720 && surface->GetFormat() == gfx::SurfaceFormat::B8G8R8A8)){
+      char message[192];snprintf(message,sizeof(message),"Gecko pump failure: surface width=%d height=%d format=%u sequence=%llu",
+        size.width,size.height,unsigned(surface->GetFormat()),(unsigned long long)sequence);
+      if(sCallbacks.log)sCallbacks.log(sCallbacks.context,message);
+      return NS_ERROR_UNEXPECTED;
+    }
     traceStage("Gecko pump: surface mapping entered");
     gfx::DataSourceSurface::ScopedMap map(surface, gfx::DataSourceSurface::READ);
     traceStage("Gecko pump: surface mapping returned");
-    NS_ENSURE_TRUE(map.IsMapped() && map.GetData() && map.GetStride() >= size.width * 4 &&
-                  map.GetStride() <= 8192, NS_ERROR_UNEXPECTED);
+    if(!(map.IsMapped() && map.GetData() && map.GetStride() >= size.width * 4 && map.GetStride() <= 8192)){
+      char message[192];snprintf(message,sizeof(message),"Gecko pump failure: mapping width=%d height=%d mapped=%d data=%d stride=%d sequence=%llu",
+        size.width,size.height,map.IsMapped(),map.IsMapped()&&map.GetData()!=nullptr,map.IsMapped()?map.GetStride():0,(unsigned long long)sequence);
+      if(sCallbacks.log)sCallbacks.log(sCallbacks.context,message);
+      return NS_ERROR_UNEXPECTED;
+    }
     traceStage("Gecko pump: native presentation entered");
     const bool presented = sCallbacks.present(sCallbacks.context, map.GetData(), size.width,
                                               size.height, map.GetStride());

@@ -115,6 +115,7 @@ function initializeOrbisFoxShell() {
     const toggle=(id,on,label)=>{attribute($(id),"aria-checked",String(on));text($(id),label+": "+(on?"On":"Off"));};
     toggle("restore-session",settings.restoreSession===true,"Open previous tabs at startup");
     toggle("gpc-toggle",settings.globalPrivacyControl===true,"Tell websites not to sell or share my data");
+    toggle("reduced-motion",settings.reducedMotion===true,"Reduced motion");
     const confirming=Date.now()<clearConfirmUntil;attribute($("clear-site-data"),"data-confirm",String(confirming));
     text($("clear-site-data"),confirming?"Press again to clear all cookies and site data":"Clear cookies and site data…");
     for(const scheme of ['system','light','dark'])attribute($('color-'+scheme),'aria-pressed',String((settings.colorScheme||'system')===scheme));
@@ -250,6 +251,7 @@ function initializeOrbisFoxShell() {
     else if(name==="home-default")saveSettings({homePage:""});
     else if(name==="restore-session")saveSettings({restoreSession:actions.settings().restoreSession!==true});
     else if(name==="gpc-toggle")saveSettings({globalPrivacyControl:actions.settings().globalPrivacyControl!==true});
+    else if(name==="reduced-motion")saveSettings({reducedMotion:actions.settings().reducedMotion!==true});
     else if(name==="clear-site-data"){
       // Irreversible: require a second press within five seconds.
       if(Date.now()>=clearConfirmUntil){clearConfirmUntil=Date.now()+5000;renderSettings();text($("settings-status"),"This signs you out of websites. Press again to confirm.");return;}

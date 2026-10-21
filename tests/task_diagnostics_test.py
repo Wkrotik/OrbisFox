@@ -2,12 +2,12 @@
 Red/green proves lifetime only, not Gecko event dispatch or firmware timing.
 """
 import os
-from pathlib import Path
 import resource
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -85,6 +85,9 @@ inline bool NS_IsMainThread(){return testMain;}
 #include <cstring>
 #include <cstdint>
 #include <type_traits>
+#include <cstdio>
+#include <string>
+#include "completed-tasks.inc"
 using namespace mozilla::widget;
 static uint64_t clockNow=100;
 bool testMain=true;
@@ -115,6 +118,20 @@ int main(){
  assert(stats.lastDetailedMicros==300000);
  assert(!strcmp(stats.lastDetailedName,"lifetime-regression-task"));
  assert(names==32);
+ assert(stats.completedCount==16&&stats.completedSerial==32);
+ for(unsigned i=0;i<stats.completedCount;++i){
+  const auto& task=stats.completed[i];
+  assert(task.serial==17+i&&task.micros==300000&&task.depth==1&&task.detailed);
+  assert(task.ended==100+task.serial*300000);
+  assert(!strcmp(task.name,"lifetime-regression-task"));
+ }
+ FILE* output=tmpfile();assert(output);uint64_t cursor=0;
+ writeCompletedTasks(output,stats,cursor);assert(cursor==32);
+ const long first=ftell(output);writeCompletedTasks(output,stats,cursor);assert(ftell(output)==first);
+ rewind(output);std::string text;char line[512];while(fgets(line,sizeof(line),output))text+=line;
+ assert(text.find("main-task-history lost=16")!=std::string::npos);
+ assert(text.find("main-task-complete id=17 end-us=5100100 inclusive-us=300000 depth=1 detailed=1 name=lifetime-regression-task")!=std::string::npos);
+ fclose(output);
  {nsCOMPtr<nsIRunnable> runnable=new Runnable();OrbisMainTaskSpan span(runnable);clockNow+=1;runnable=nullptr;}
  assert(destroyed==33&&names==32);
  // Nested event spans restore the outer start and balance depth.
@@ -129,8 +146,27 @@ int main(){
  const auto after=GetOrbisTaskDiagnostics();
  assert(after.events==before.events&&after.longEvents==before.longEvents&&after.depth==0);
  assert(destroyed==35&&names==32);
+ testMain=true;
+ // Nested records are inclusive, ordered by completion, and identify depth.
+ {nsCOMPtr<nsIRunnable> runnable=new Runnable();OrbisMainTaskSpan outer(runnable);
+  {OrbisMainTaskSpan inner(runnable,true);clockNow+=250000;}
+  clockNow+=100000;
+ }
+ stats=GetOrbisTaskDiagnostics();assert(stats.completedSerial==34&&stats.completedCount==16);
+ assert(stats.completed[14].depth==2&&stats.completed[14].micros==250000&&stats.completed[14].detailed);
+ assert(stats.completed[15].depth==1&&stats.completed[15].micros==350000&&!stats.completed[15].detailed);
+ output=tmpfile();assert(output);writeCompletedTasks(output,stats,cursor);assert(cursor==34);
+ rewind(output);text.clear();while(fgets(line,sizeof(line),output))text+=line;
+ assert(text.find("lost=")==std::string::npos&&text.find("id=33 ")!=std::string::npos);
+ assert(text.find("id=32 ")==std::string::npos);fclose(output);
+ // A backwards clock cannot create a bogus long completion.
+ {nsCOMPtr<nsIRunnable> runnable=new Runnable();OrbisMainTaskSpan span(runnable);--clockNow;}
+ assert(GetOrbisTaskDiagnostics().completedSerial==34);
 }
 ''')
+            native = (ROOT / 'gecko/orbisfox/native/main.cpp').read_text()
+            writer = native[native.index('void writeCompletedTasks('):native.index('void* monitor(')]
+            (path / 'completed-tasks.inc').write_text(writer)
             source = ROOT / 'gecko/widget/orbis/OrbisTaskDiagnostics.cpp'
             header = ROOT / 'gecko/widget/orbis/OrbisTaskDiagnostics.h'
             shutil.copy2(header, path / header.name)
@@ -144,7 +180,7 @@ int main(){
             subprocess.run(flags + [str(path / source.name), str(path / 'test.cpp'), '-o', str(fixed)],
                            check=True, capture_output=True, text=True)
             environment = dict(os.environ, ASAN_OPTIONS='detect_leaks=1:abort_on_error=0')
-            green = subprocess.run([str(fixed)], capture_output=True, text=True, env=environment)
+            green = subprocess.run([str(fixed)], capture_output=True, text=True, env=environment, check=False)
             self.assertEqual(green.returncode, 0, green.stdout + green.stderr)
             # Isolate only the old borrowed-reference defect in a private build.
             text = (path / header.name).read_text()
@@ -156,7 +192,7 @@ int main(){
             def no_core():
                 resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
             red = subprocess.run([str(unfixed)], capture_output=True, text=True,
-                                 env=environment, preexec_fn=no_core)
+                                 env=environment, preexec_fn=no_core, check=False)
             self.assertNotEqual(red.returncode, 0)
             self.assertIn('heap-use-after-free', red.stderr)
 

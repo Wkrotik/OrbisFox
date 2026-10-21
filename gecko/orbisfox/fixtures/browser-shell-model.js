@@ -72,12 +72,12 @@ var OrbisFoxShellModel = (() => {
   }
   class Settings {
     constructor(serialized="{}",persist=null){
-      this.persist=persist;this.value={searchEngine:"google",cursorSpeed:1,defaultZoom:100,colorScheme:"system",homePage:"",restoreSession:false,globalPrivacyControl:false};
+      this.persist=persist;this.value={searchEngine:"google",cursorSpeed:1,defaultZoom:100,colorScheme:"system",homePage:"",restoreSession:false,globalPrivacyControl:false,reducedMotion:false};
       try{if(typeof serialized!=="string"||serialized.length>4096)throw Error();const parsed=JSON.parse(serialized);this.validate(parsed);this.value={searchEngine:parsed.searchEngine,cursorSpeed:parsed.cursorSpeed,defaultZoom:parsed.defaultZoom??100,colorScheme:parsed.colorScheme??"system",
-        homePage:parsed.homePage??"",restoreSession:parsed.restoreSession??false,globalPrivacyControl:parsed.globalPrivacyControl??false};}catch(_error){}
+        homePage:parsed.homePage??"",restoreSession:parsed.restoreSession??false,globalPrivacyControl:parsed.globalPrivacyControl??false,reducedMotion:parsed.reducedMotion??false};}catch(_error){}
     }
     validate(value){if(!value || typeof value.searchEngine!=="string" || !Object.hasOwn(SEARCH_ENGINES,value.searchEngine)||!Number.isFinite(value.cursorSpeed)||value.cursorSpeed<0.25||value.cursorSpeed>3||(value.defaultZoom!==undefined&&(!Number.isInteger(value.defaultZoom)||value.defaultZoom<50||value.defaultZoom>200||value.defaultZoom%10))||(value.colorScheme!==undefined&&!["system","light","dark"].includes(value.colorScheme))||
-      (value.restoreSession!==undefined&&typeof value.restoreSession!=="boolean")||(value.globalPrivacyControl!==undefined&&typeof value.globalPrivacyControl!=="boolean"))throw Error("Invalid browser settings");
+      (value.restoreSession!==undefined&&typeof value.restoreSession!=="boolean")||(value.globalPrivacyControl!==undefined&&typeof value.globalPrivacyControl!=="boolean")||(value.reducedMotion!==undefined&&typeof value.reducedMotion!=="boolean"))throw Error("Invalid browser settings");
       if(value.homePage!==undefined&&value.homePage!==""&&(typeof value.homePage!=="string"||value.homePage.length>1024||!/^https?:\/\//i.test(value.homePage)||resolveAddress(value.homePage,{web:true})!==value.homePage))throw Error("Invalid home page");}
     snapshot(){return {...this.value};}
     // Only known keys are stored, and a saved record must stay loadable.

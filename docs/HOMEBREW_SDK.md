@@ -132,6 +132,76 @@ keyboard layout, trusted form submission and focus behavior need a fresh
 native-SDK build and console test. The standalone dialog probe above remains
 separate and is not the browser's default keyboard.
 
+### Main-thread stall investigation (#4)
+
+The operator's October 21 browsing runs confirm multi-second stalls on this SDK:
+maximum inclusive main-thread tasks were 8.51 s and 7.71 s in two different runs.
+The latest run recorded 7.71 s of script-loader work and a 1.80 s browser-shell
+callback near shutdown. Task names and inclusive times are not a CPU breakdown;
+nested work overlaps, and these workloads are not a controlled old/new SDK
+comparison. Faster YouTube/page loading is operator feedback, not a benchmark.
+
+The reported stopped screen followed a caught `NS_ERROR_UNEXPECTED` from
+`pumpFrame()`, then orderly Gecko shutdown. This is an application error path,
+not evidence of an OS crash or successful 4K decoding. Existing logs do not
+identify which pump validation failed. Do not bypass surface bounds, formats or
+mapping checks to keep playback apparently running.
+
+The uploaded diagnostic candidate adds:
+- A fixed 16-entry history of completed main-thread spans >=250 ms, carrying
+  process-time completion timestamps, inclusive duration, depth and whether the
+  name is a detailed runnable or an outer event span. The existing monitor emits
+  each entry once and reports overwritten records; this is not an exhaustive
+  profiler. A newly enabled capture does not replay pre-capture completions.
+- Opt-in, slow-only (>=250 ms) shell callback phase timings using the chrome
+  window's monotonic performance clock: native actions, frame pump, chrome init,
+  input, tab state, probes/session and rendering. Labels and numeric times only;
+  no page text, credentials or new URL fields.
+- Exact keyboard-status, surface-size/format and map/stride failure messages,
+  retaining the original pump error returns and cleanup.
+
+The first run of that candidate retained 247 long-span completion records, with
+no bounded-history loss reported. Its longest detailed spans were a 10.38 s
+`TimeoutExecutor Runnable`, an 8.09 s view-transition update task, and 5.83 s in
+`nsHtml5ExecutorReflusher`. A timeout-executor span can contain multiple callbacks;
+these are inclusive task durations, not proof of one expensive JavaScript call.
+Slow shell callbacks included 2.45 s processing native actions; close-tab commands
+preceded the slow native-action samples. Routine chrome rendering is not the
+largest measured source of these stalls.
+
+The operator reported a crash at the end. Unlike the earlier caught pump error,
+this run ended abruptly, without a pump-failure message or orderly-shutdown
+record. No owned title core dump was available. The final memory sample recorded
+85,983,232 bytes of flexible memory available and no tracked GC allocation/map
+failures; native libc heap totals are unavailable and samples are coarse, so this
+does not rule out an allocation failure between samples. The crash cause remains
+unresolved: do not infer a native faulting function, OOM, or a network root cause
+from the last logged event alone.
+
+These are attribution changes, not a demonstrated stall fix. Correlate completion
+`end-us` with heartbeat `native_us` and controlled HTTP/media events for #7;
+separately compare diagnostics off/on before judging a speedup. Host sanitizer
+and shell-double tests do not establish console timing. No fresh capture flag,
+console launch, build or deployment is authorized merely by this documentation.
+
+### O2 candidate and reduced motion
+
+The native-SDK configure producer now explicitly uses `--enable-optimize=-O2`
+and records the effective Gecko optimization flags in its configure report.
+Previously the generic FreeBSD target fell back to `-O` (Clang `-O1`), including
+SpiderMonkey's interpreter. This is native compiler optimization, not JavaScript
+JIT enablement. The legacy SDK configuration is unchanged. Compare the same
+workload and diagnostics state; no console speedup is established by this change.
+
+Settings → General → Website appearance includes **Reduced motion**, off by
+default for new/legacy profiles. It is reversible and saved through the existing
+transactional settings path; a failed save restores the previous setting and
+runtime preference. It writes Gecko's real `ui.prefersReducedMotion` integer
+preference (`1` on, `0` off), rather than injecting CSS or disabling scripts.
+Websites may ignore it or require reload before adapting. Leave it off for the
+initial O2 comparison, then compare it independently. Host tests do not establish
+how a particular console website responds to live preference changes.
+
 ### Console exit finding
 
 The first native probe completed all 52 checks, closed its result file and printed

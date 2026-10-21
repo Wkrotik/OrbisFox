@@ -13,6 +13,7 @@ namespace {
 std::atomic<uint64_t> activeStart{0},events{0},longEvents{0},lastMicros{0},maxMicros{0};
 std::atomic<unsigned> activeDepth{0};
 uint64_t stack[64]{};unsigned depth=0;char lastName[80]{},lastDetailedName[80]{};uint64_t lastDetailedMicros=0;
+OrbisCompletedTask completed[16]{};uint64_t completedSerial=0;
 pthread_mutex_t nameMutex=PTHREAD_MUTEX_INITIALIZER;
 struct NameLock {NameLock(){if(pthread_mutex_lock(&nameMutex))__builtin_trap();}~NameLock(){if(pthread_mutex_unlock(&nameMutex))__builtin_trap();}};
 }
@@ -36,11 +37,18 @@ OrbisMainTaskSpan::~OrbisMainTaskSpan(){
  for(const char* p=name.BeginReading();p!=name.EndReading();++p){char c=*p;if(n==sizeof(lastName)-1)break;lastName[n++]=c>=32&&c<=126?c:'?';}
  lastName[n]=0;
  if(detailed_){memcpy(lastDetailedName,lastName,sizeof(lastName));lastDetailedMicros=elapsed;}
+ const uint64_t serial=++completedSerial;auto& record=completed[(serial-1)%16];
+ record.serial=serial;record.ended=now;record.micros=elapsed;record.depth=depth+1;record.detailed=detailed_;
+ memcpy(record.name,lastName,sizeof(lastName));
 }
 OrbisTaskDiagnostics GetOrbisTaskDiagnostics(){
  OrbisTaskDiagnostics result;
  result.activeStart=activeStart.load();result.depth=activeDepth.load();result.events=events.load();result.longEvents=longEvents.load();
  result.lastMicros=lastMicros.load();result.maxMicros=maxMicros.load();
- {NameLock lock;memcpy(result.lastLongName,lastName,sizeof(lastName));memcpy(result.lastDetailedName,lastDetailedName,sizeof(lastDetailedName));result.lastDetailedMicros=lastDetailedMicros;}return result;
+ {NameLock lock;memcpy(result.lastLongName,lastName,sizeof(lastName));memcpy(result.lastDetailedName,lastDetailedName,sizeof(lastDetailedName));result.lastDetailedMicros=lastDetailedMicros;
+  result.completedSerial=completedSerial;result.completedCount=completedSerial<16?unsigned(completedSerial):16;
+  const uint64_t first=completedSerial-result.completedCount;
+  for(unsigned i=0;i<result.completedCount;++i)result.completed[i]=completed[(first+i)%16];
+ }return result;
 }
 }

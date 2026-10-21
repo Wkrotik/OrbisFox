@@ -2,8 +2,8 @@
 // Actual supervisor with explicit XPConnect/docshell/controller/editor doubles.
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const source=fs.readFileSync('gecko/orbisfox/fixtures/browser-shell-host.js','utf8');
-function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeReady=true,tabsTest=false,textTest=false,stale=false,scroll=false,shellScroll=false,tabFault=false,reenterTabs=false,bookmarksTest=false,historyTest=false,mediaTest=false,saveFails=false,settingsTest=false,cursorFails=false,initialSettings='{}',initialSession='[]',featuresTest=false,clearData=null,ticks=7,tlsState=null,secureUI=undefined,blankTitle=false,delayWeb=-1,siteDataFlag=false,script=null,cursorX=40,cursorY=150,pixelRatio=1,rect={left:0,top:104,width:1280,height:584}}={}) {
-  const calls=[],snapshots=[],elements=new Map();let tick,actions,exit=false,listenerCount=0,selected='content',editing=false;
+function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeReady=true,tabsTest=false,textTest=false,stale=false,scroll=false,shellScroll=false,tabFault=false,reenterTabs=false,bookmarksTest=false,historyTest=false,mediaTest=false,saveFails=false,settingsTest=false,cursorFails=false,motionFails=false,initialSettings='{}',initialSession='[]',featuresTest=false,clearData=null,ticks=7,tlsState=null,secureUI=undefined,blankTitle=false,delayWeb=-1,siteDataFlag=false,script=null,cursorX=40,cursorY=150,pixelRatio=1,rect={left:0,top:104,width:1280,height:584},timings=null}={}) {
+  const calls=[],snapshots=[],elements=new Map();let tick,actions,exit=false,listenerCount=0,selected='content',editing=false,testNow=1000;
   const Ci={nsIEditor:{eNone:0,eStrip:0},nsIDOMWindowUtils:{WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE:1,WHEEL_EVENT_ASYNC_ENABLED:8},nsITimer:{TYPE_REPEATING_SLACK:1},
     nsIWebProgress:{NOTIFY_STATE_DOCUMENT:1,NOTIFY_LOCATION:2},nsIWebProgressListener:{STATE_IS_BROKEN:1,STATE_IS_SECURE:2,STATE_IS_DOCUMENT:4,STATE_START:8,STATE_STOP:16,LOCATION_CHANGE_SAME_DOCUMENT:32},nsIChannel:{},nsITransportSecurityInfo:{},
     nsIWebNavigation:{STOP_ALL:1,LOAD_FLAGS_NONE:0},nsIBrowserDOMWindow:{OPEN_CURRENTWINDOW:1,OPEN_NEWTAB:3,OPEN_PRINT_BROWSER:4,OPEN_NEWTAB_BACKGROUND:5,OPEN_NEWTAB_FOREGROUND:6,OPEN_NO_REFERRER:8}};
@@ -29,18 +29,19 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
     removeContent(id){elements.delete(id);calls.push(['remove',id]);},renderTabs(tabs,active){calls.push(['tabs',tabs.map(t=>t.id),active]);},isEditing:()=>editing,
     canScroll:()=>!editing&&!shellScroll,scrollShell(...args){calls.push(['shell-wheel',...args]);},pointerMoved(){},control(){},editText(value){editing=true;assert(actions.openTextKeyboard(value));calls.push(['edit-text',value]);},
     finishAddressKeyboard(status,text){editing=false;calls.push(['keyboard-finish',status,text]);if(textTest)calls.push(['commit-result',actions.commitText(text)]);},
-    update(state,diagnostic,gates){snapshots.push({state,gates});},destroy(){calls.push(['destroy']);}};
-  const win={addEventListener(){},removeEventListener(){},devicePixelRatio:pixelRatio,document:{documentURI:'chrome://orbisfox/content/browser.xhtml',readyState:'complete',nodePrincipal:{isSystemPrincipal:principal}},wrappedJSObject:{OrbisFoxShell:ui}};
+    update(state,diagnostic,gates){testNow+=timings?.renderMs||0;snapshots.push({state,gates});},destroy(){calls.push(['destroy']);}};
+  const win={performance:{now:()=>{assert.equal(timings?.enabled,true,'no timing clock reads without diagnostics');return testNow;}},addEventListener(){},removeEventListener(){},devicePixelRatio:pixelRatio,document:{documentURI:'chrome://orbisfox/content/browser.xhtml',readyState:'complete',nodePrincipal:{isSystemPrincipal:principal}},wrappedJSObject:{OrbisFoxShell:ui}};
   const chrome={docShell:{domWindow:win},loadURI(){}};
   const host={cursorX,cursorY,buttons:0,nativeNetworkReady:nativeReady&&delayWeb<0,framesPresented:0,scrollX:scroll?4:0,scrollY:scroll?-7:0,keyboardStatus:1,keyboardText:'fox',keyboardConfirmButton:1,
     openAddressKeyboard(){return true;},openTextKeyboard(){calls.push(['open-text']);return true;},cancelAddressKeyboard(){calls.push(['cancel-keyboard']);},
     setNativeChromeState:scene=>calls.push(['native-scene',scene]),sendEnter:()=>calls.push(['enter-text']),
-    createChromeBrowser:()=>chrome,pumpFrame:()=>!early,log:text=>calls.push(['log',text]),fixtureCheckpoint:value=>calls.push(['checkpoint',value]),setPointerInputEnabled(enabled){calls.push(['pointer',enabled]);if(!enabled&&reenterTabs&&actions)assert.equal(actions.newTab(),false);},requestExit(){exit=true;},closeBrowser(){calls.push(['close']);}};
+    diagnosticsEnabled:timings?.enabled===true,
+    createChromeBrowser:()=>chrome,pumpFrame:()=>{testNow+=timings?.pumpMs||0;if(timings?.throwPump)throw Error('pump failure');return !early;},log:text=>calls.push(['log',text]),fixtureCheckpoint:value=>calls.push(['checkpoint',value]),setPointerInputEnabled(enabled){calls.push(['pointer',enabled]);if(!enabled&&reenterTabs&&actions)assert.equal(actions.newTab(),false);},requestExit(){exit=true;},closeBrowser(){calls.push(['close']);}};
   host.setCursorSpeed=value=>{if(cursorFails&&value!==1)throw Error('cursor failed');calls.push(['cursor-speed',value]);};
   const timer={initWithCallback(fn){tick=fn;},cancel(){calls.push(['cancel-timer']);}};
-  let bookmarkPrefs='[]',historyPrefs='[]',settingsPrefs=initialSettings,sessionPrefs=initialSession,contentColorScheme=2;const boolPrefs={};let prefSaves=0;
+  let bookmarkPrefs='[]',historyPrefs='[]',settingsPrefs=initialSettings,sessionPrefs=initialSession,contentColorScheme=2;const boolPrefs={},intPrefs={};let prefSaves=0;
   // Full pref names (branch prefix + name) catch prefs written on the wrong branch.
-  const preferenceService={getBranch:(prefix='')=>({setIntPref:(name,value)=>{assert.equal(prefix+name,'layout.css.prefers-color-scheme.content-override');contentColorScheme=value;},
+  const preferenceService={getBranch:(prefix='')=>({setIntPref:(name,value)=>{const full=prefix+name;assert(['layout.css.prefers-color-scheme.content-override','ui.prefersReducedMotion'].includes(full),full);assert.equal(typeof value,'number');if(full==='ui.prefersReducedMotion'&&value===1&&motionFails)throw Error('motion pref failed');intPrefs[full]=value;if(full==='layout.css.prefers-color-scheme.content-override')contentColorScheme=value;},
     setBoolPref:(name,value)=>{assert(['privacy.globalprivacycontrol.enabled','privacy.globalprivacycontrol.functionality.enabled'].includes(prefix+name),prefix+name);assert.equal(typeof value,'boolean');boolPrefs[prefix+name]=value;},
     getStringPref:name=>{const full=prefix+name;assert(full.startsWith('orbisfox.browser.'),full);return name==='settings'?settingsPrefs:name==='history'?historyPrefs:name==='session'?sessionPrefs:name==='bookmarks'?bookmarkPrefs:assert.fail('unknown pref '+full);},
     setStringPref:(name,value)=>{const full=prefix+name;assert(full.startsWith('orbisfox.browser.'),full);if(name==='settings')settingsPrefs=value;else if(name==='history')historyPrefs=value;else if(name==='session')sessionPrefs=value;else if(name==='bookmarks')bookmarkPrefs=value;else assert.fail('unknown pref '+full);}}),
@@ -53,10 +54,11 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
   const tls={snapshot:()=>({ok:true}),close(){calls.push(['TLS-close']);}};
   const context=vm.createContext({Cc,Ci,host,io:{newURI:uri},ssm:{getSystemPrincipal:()=> 'system',createContentPrincipal:()=> 'file',createNullPrincipal:()=> 'null'},
     ChromeUtils:{generateQI:()=>()=>{}},startTrustedNetworkProbes:()=>network,startTrustedHTTPSProbes:()=>tls});
+  if(timings)context.Date={now:()=>testNow};
   context.load=path=>vm.runInContext(fs.readFileSync('gecko/orbisfox/fixtures/'+path.split('/').at(-1),'utf8'),context);
   const tm={spinEventLoopUntil(name,done){
     for(let i=0;i<ticks&&!done();++i){if(i===delayWeb)host.nativeNetworkReady=true;tick();if(!actions)continue;
-      if(script){script(i,{actions,calls,elements,snapshots,win,uri,boolPrefs,host,ui,get editing(){return editing;},set editing(value){editing=value;},get sessionPrefs(){return sessionPrefs;},get prefSaves(){return prefSaves;},get selected(){return selected;}});if(i===ticks-2)actions.exit();continue;}
+      if(script){script(i,{actions,calls,elements,snapshots,win,uri,boolPrefs,intPrefs,host,ui,get settingsPrefs(){return settingsPrefs;},get editing(){return editing;},set editing(value){editing=value;},get sessionPrefs(){return sessionPrefs;},get prefSaves(){return prefSaves;},get selected(){return selected;}});if(i===ticks-2)actions.exit();continue;}
       if(i===0){if(tabFault){assert.equal(actions.newTab(),false);assert.equal(elements.size,1);}
         assert.equal(actions.navigate('chrome://global/'),false);assert.equal(actions.navigate('https://arbitrary.example/path'),profileOkay&&nativeReady&&!failLoad);
         if(settingsTest){
@@ -153,8 +155,23 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
     }
   }};
   vm.runInContext(source,context);context.runOrbisFoxBrowserShell(Cc,Ci,host,context.io,tm,context.ssm,{snapshot:()=>({ok:profileOkay})});
-  assert.equal(listenerCount,0);return {calls,snapshots,exit,settingsPrefs,sessionPrefs,boolPrefs,prefSaves};
+  assert.equal(listenerCount,0);return {calls,snapshots,exit,settingsPrefs,sessionPrefs,boolPrefs,intPrefs,prefSaves};
 }
+// Phase diagnostics are opt-in, slow-only, numeric and emitted on error too.
+for(const enabled of [false,true]){
+  const result=run({timings:{enabled,pumpMs:300,renderMs:400}});
+  const logs=result.calls.filter(c=>c[0]==='log'&&c[1].startsWith('Browser shell timing: '));
+  assert.equal(logs.length>0,enabled);
+  if(enabled){
+    const timing=JSON.parse(logs[0][1].slice('Browser shell timing: '.length));
+    assert.equal(timing.totalMs,700);assert.equal(timing.phases.pump,300);assert.equal(timing.phases.render,400);
+    assert(!logs.some(c=>c[1].includes('arbitrary.example')));
+  }
+}
+assert(!run({timings:{enabled:true,pumpMs:100,renderMs:100}}).calls.some(c=>c[0]==='log'&&c[1].startsWith('Browser shell timing: ')));
+const failedTick=run({timings:{enabled:true,pumpMs:350,throwPump:true}});
+assert(failedTick.calls.some(c=>c[0]==='log'&&c[1].includes('"phases":{"native-actions":0,"pump":350}')));
+assert(failedTick.calls.some(c=>c[0]==='close'),'timing must not prevent cleanup after pump failure');
 const clearResults=[];
 for(let cycle=0;cycle<32;++cycle){
   const good=run();assert(good.exit);assert(good.calls.some(c=>c[0]==='checkpoint'&&c[1]===8));
@@ -247,6 +264,13 @@ for(let cycle=0;cycle<4;++cycle){
   assert.equal(gpc.boolPrefs['privacy.globalprivacycontrol.enabled'],true);assert(!('privacy.globalprivacycontrol.functionality.enabled' in gpc.boolPrefs),'no dead pref is written');
   assert.equal(run().boolPrefs['privacy.globalprivacycontrol.enabled'],false);
   const gpcFail=run({saveFails:true,script(i,t){if(i===0)assert.equal(t.actions.saveSettings({globalPrivacyControl:true}),false);}});assert.equal(gpcFail.boolPrefs['privacy.globalprivacycontrol.enabled'],false);
+  // Reduced motion uses the real root integer pref, defaults off, and survives restart.
+  assert.equal(run().intPrefs['ui.prefersReducedMotion'],0);
+  let motionSaved='';
+  run({script(i,t){if(i!==0)return;for(const enabled of [true,false,true]){assert(t.actions.saveSettings({reducedMotion:enabled}));assert.equal(t.actions.settings().reducedMotion,enabled);assert.equal(t.intPrefs['ui.prefersReducedMotion'],enabled?1:0);assert.equal(JSON.parse(t.settingsPrefs).reducedMotion,enabled);}motionSaved=t.settingsPrefs;}});
+  assert.equal(run({initialSettings:motionSaved}).intPrefs['ui.prefersReducedMotion'],1);
+  for(const initial of [false,true])run({saveFails:true,initialSettings:JSON.stringify({searchEngine:'google',cursorSpeed:1,reducedMotion:initial}),script(i,t){if(i!==0)return;assert.equal(t.actions.saveSettings({reducedMotion:!initial}),false);assert.equal(t.actions.settings().reducedMotion,initial);assert.equal(t.intPrefs['ui.prefersReducedMotion'],initial?1:0);assert.equal(JSON.parse(t.settingsPrefs).reducedMotion,initial);}});
+  run({motionFails:true,script(i,t){if(i!==0)return;assert.equal(t.actions.saveSettings({reducedMotion:true}),false);assert.equal(t.actions.settings().reducedMotion,false);assert.equal(t.intPrefs['ui.prefersReducedMotion'],0);assert.equal(t.settingsPrefs,'{}');}});
   // Clear-data prefers CLEAR_COOKIES_AND_SITE_DATA (real Gecko flag values) and waits for the web gate.
   run({ticks:6,delayWeb:4,clearData:{failed:0},script(i,t){if(i===1)assert.equal(t.actions.clearSiteData(()=>assert.fail('must not clear before the gate')),false);}});
   // A failed load replaced by Gecko's error page keeps a readable message.

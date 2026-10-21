@@ -1,16 +1,32 @@
 # SPDX-License-Identifier: MIT
 """Native engine producer ownership/SDK gates, not engine execution proof."""
+import ast
 import json
-from pathlib import Path
 import runpy
 import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = runpy.run_path(str(ROOT / 'scripts/build-gecko-layout.py'))
 
 
 class HomebrewEngineTest(unittest.TestCase):
+    def test_native_configure_uses_o2_without_changing_legacy_flags(self):
+        source = ast.parse((ROOT / 'scripts/configure-gecko-layout.py').read_text())
+        main = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        position = next(index for index, node in enumerate(main.body)
+                        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == 'command' for target in node.targets))
+        construction = compile(ast.Module(body=main.body[position:position + 2], type_ignores=[]), '<actual configure command>', 'exec')
+        for native in (False, True):
+            values = {'SOURCE': ROOT / '.deps/gecko-layout', 'native_sdk': native, 'args': SimpleNamespace(mesa=False)}
+            exec(construction, values)
+            command = values['command']
+            assert isinstance(command, list)
+            options = [option for option in command if option.startswith('--enable-optimize')]
+            self.assertEqual(options, ['--enable-optimize=-O2'] if native else [])
+
     def test_native_prerequisites_are_separate_and_explicit(self):
         commands = BUILD['prerequisite_commands']('homebrew', False, 3)
         self.assertEqual([Path(c[1]).name for c in commands],

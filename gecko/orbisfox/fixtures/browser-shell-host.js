@@ -190,6 +190,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
       // through Gecko's own implementation; nothing is injected into pages.
       const apply=next=>{root.setIntPref("layout.css.prefers-color-scheme.content-override",{dark:0,light:1,system:2}[next.colorScheme]);
         root.setBoolPref("privacy.globalprivacycontrol.enabled",next.globalPrivacyControl===true);
+        root.setIntPref("ui.prefersReducedMotion",next.reducedMotion?1:0);
         host.setCursorSpeed(next.cursorSpeed);};
       settings=new OrbisFoxShellModel.Settings(branch.getStringPref("settings","{}"),(serialized,next)=>{
         if(profile?.snapshot().ok!==true)throw Error("Settings require a persistent profile");
@@ -504,12 +505,18 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     host.setDiagnosticsEnabled?.(host.diagnosticsEnabled===true);
     controls=new OrbisFoxShellModel.Controller();chrome=host.createChromeBrowser(1280,720);
     chrome.loadURI(io.newURI(CHROME),{triggeringPrincipal:ssm.getSystemPrincipal()});
+    const tickNow=()=>chrome.docShell.domWindow.performance.now();
+    const tickPhase=(timing,next)=>{if(timing){const now=tickNow();timing.phases[timing.phase]=Math.max(0,now-timing.last);timing.last=now;timing.phase=next;}};
     timer.initWithCallback(()=>{
+      const start=host.diagnosticsEnabled===true?tickNow():null;
+      const timing=start===null?null:{start,last:start,phase:'native-actions',phases:{}};
       try {
         ++ticks;
         if(ui&&host.takeNativeChromeAction)for(let i=0;i<16;++i){const command=host.takeNativeChromeAction();if(!command)break;
           host.log('Native chrome: dequeued '+command+' handled='+(!keyboardReleasePending&&ui.nativeCommand(command)));lastNativeScene='';if(!alive)break;}
+        tickPhase(timing,'pump');
         if(!alive||!host.pumpFrame()){alive=false;return;}
+        tickPhase(timing,'chrome-init');
         if(!ui){
           const win=chrome.docShell.domWindow,doc=win.document;
           if(doc.documentURI!==CHROME||doc.readyState==="loading"){if(Date.now()-started>15000)throw new Error("Chrome document readiness timeout");return;}
@@ -598,6 +605,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
           if(!tabAction(()=>newTab()))throw new Error("Initial real tab creation failed");
           host.log("Browser UI: privileged shell / real bounded tabs / content separation verified");
         }
+        tickPhase(timing,'input');
         for(const tab of tabs)if(!bindTab(tab)&&Date.now()-tab.created>5000)throw new Error("New content tab readiness timeout");
         if(!active.nav)return;
         if(host.cursorX!==lastX||host.cursorY!==lastY)ui.pointerMoved();lastX=host.cursorX;lastY=host.cursorY;
@@ -629,6 +637,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
             win.windowUtils.sendWheelEvent(x*win.innerWidth/rect.width,y*win.innerHeight/rect.height,dx,dy,0,0,0,0,0,flags);
           }
         }catch(error){if(scrollFailures++<8)host.log('Browser wheel: dispatch skipped; will retry: '+String(error).slice(0,180));}
+        tickPhase(timing,'tab-state');
         for(const tab of tabs){
           if(!tab.nav)continue;const document=tab.nav.document;tab.model.history(tab.nav.canGoBack,tab.nav.canGoForward);
           // Like Firefox, an untitled or still-loading page shows its host.
@@ -647,6 +656,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
               if(result.ok&&result.passed===8&&!network)network=startTrustedNetworkProbes(Cc,Ci,io,tm,ssm,host);}
           }
         }
+        tickPhase(timing,'probes-session');
         const snapshot=network?.snapshot();if(!https&&snapshot?.storage.ok&&snapshot.dns.ok)https=startTrustedHTTPSProbes(Cc,Ci,io,ssm,host,snapshot);
         if(!webWasReady&&gates().web){webWasReady=true;webBecameReady();}
         if(webWasReady&&ticks%30===0)saveSession();
@@ -655,6 +665,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
         else if(!diagnosticText||ticks%30===0)diagnosticText=JSON.stringify({nativeNetReady:host.nativeNetworkReady,nativeJitReady:host.nativeJitReady,nativeAudioReady:host.nativeAudioReady,profile:profile?.snapshot(),network:snapshot||"Awaiting8 checks",https:https?.snapshot()||"Awaiting DNS/storage",
           tabs:tabs.length,maxTabs:OrbisFoxShellModel.MAX_TABS,scope:"General HTTP/HTTPS after storage/quota/TLS gates. Unsafe schemes/credentials denied. No production sandbox/security certification."},null,2);
         const diagnostic=diagnosticText;
+        tickPhase(timing,'render');
         ui.renderTabs(tabs.map(tab=>({id:tab.id,...tab.model.snapshot(),favicon:icons.request(tab.model.location,tab.nav?.document)})),active.id);ui.update(active.model.snapshot(),diagnostic,{...gates(),bookmarksAvailable:!!bookmarks});
         if(active.model.security!==lastSecurity){lastSecurity=active.model.security;lastNativeScene="";}
         if(host.setNativeChromeState&&ui.nativeChromeScene&&(ticks%30===0||!lastNativeScene)){
@@ -662,6 +673,8 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
         if(diagnostic!==lastDiagnostics){host.log("Browser UI diagnostics: "+diagnostic.slice(0,3900));lastDiagnostics=diagnostic;}
         if(ticks%120===0)host.log("Browser UI heartbeat: ticks="+ticks+" frames="+host.framesPresented+" tabs="+tabs.length);
       }catch(error){host.log("ERROR: browser shell: "+error+"\n"+error.stack);alive=false;}
+      finally{if(timing){tickPhase(timing,'done');const totalMs=Math.max(0,timing.last-timing.start);
+        if(totalMs>=250&&host.diagnosticsEnabled===true)host.log('Browser shell timing: '+JSON.stringify({tick:ticks,totalMs,phases:timing.phases}));}}
     },33,Ci.nsITimer.TYPE_REPEATING_SLACK);
     tm.spinEventLoopUntil("OrbisFox bounded real-tab shell",()=>!alive);
   }finally{
