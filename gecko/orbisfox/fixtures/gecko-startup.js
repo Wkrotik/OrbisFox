@@ -5,7 +5,8 @@ function getTrustedProfilePath(Cc, Ci) {
   // Native main owns HOME before XRE. Never accept an arbitrary filesystem path
   // or fall back to the working profile if experimental setup is broken.
   const path = Cc["@mozilla.org/process/environment;1"].getService(Ci.nsIEnvironment).get("HOME");
-  if (path !== "/data/orbisfox/gecko-profile" && path !== "/data/orbisfox/mesa-profile")
+  if (path !== "/data/orbisfox/gecko-profile" && path !== "/data/orbisfox/mesa-profile" &&
+      path !== "/data/orbisfox/homebrew-profile")
     throw new Error("Invalid native OrbisFox profile path");
   return path;
 }

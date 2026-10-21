@@ -1,7 +1,9 @@
 #include "orbisfox/native_allocator.h"
-#include "orbisfox/sdk_heap_memory.h"
 #include "orbisfox/heap_reclaim_probe.h"
+#ifndef ORBISFOX_HOMEBREW_SDK
+#include "orbisfox/sdk_heap_memory.h"
 #include "orbisfox/heap_advice_probe.h"
+#endif
 #include "orbisfox/presenter.h"
 #include <orbis/libkernel.h>
 #include <pthread.h>
@@ -11,9 +13,11 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#ifndef ORBISFOX_HOMEBREW_SDK
 // Read-only diagnostic for the exact SDK archive audited at link time. This
 // address is never used for locking or to enable SDK thread/futex machinery.
 extern "C" unsigned char __libc[];
+#endif
 namespace orbisfox {
 namespace {
 struct State {std::atomic<bool> start{false},failed{false};std::atomic<void*> slots[8]{};int ids[8]{};unsigned errors[8]{},completed[8]{};};
@@ -64,7 +68,9 @@ void* work(void* opaque){
 }
 }
 bool probe_native_allocator(){
+#ifndef ORBISFOX_HOMEBREW_SDK
   if(!initialize_native_allocator_lock())return false;
+#endif
   Watchdog guard;guard.deadline=sceKernelGetProcessTime()+30000000;
   pthread_t monitor{};const int created=pthread_create(&monitor,nullptr,watch,&guard);
   if(created!=0){log("Native allocator watchdog create=%d",created);return false;}
@@ -72,6 +78,7 @@ bool probe_native_allocator(){
     guard.done.store(true);const int rc=pthread_join(monitor,nullptr);
     if(rc!=0){log("Native allocator watchdog join=%d; aborting before uncertain stack teardown",rc);abort();}
   };
+#ifndef ORBISFOX_HOMEBREW_SDK
   const auto advice=probe_heap_advice(16384,
     [](size_t bytes){return mmap(nullptr,bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);},
     [](void* p,size_t bytes){return madvise(p,bytes,MADV_DONTNEED);},
@@ -83,15 +90,28 @@ bool probe_native_allocator(){
   log("SDK heap backing: game direct memory preferred; flexible memory retained for GC/shared/file mappings; unsupported direct discard returns ENOTSUP");
   log("Native allocator reclaim/coalesce/pretrim canaries: BEGIN before engine startup; real SDK backing, no guard mode");
   const uint64_t reclaimBefore=native_allocator_entry_count();
+#else
+  log("Native BSD allocator: real system libc owns allocation/locking/backing; no musl wrappers, bin reads, realloc-copy workaround or heap mmap interception");
+#endif
   const auto reclaim=probe_heap_reclaim(malloc,calloc,realloc,free,[](unsigned round){
     if(round%8==0)log("Native allocator reclaim canary round=%u/32",round);
   });
+#ifndef ORBISFOX_HOMEBREW_SDK
   const uint64_t reclaimCalls=native_allocator_entry_count()-reclaimBefore;
   const bool reclaimOkay=reclaim.okay() && reclaimCalls>=reclaim.calls;
   log("Native allocator reclaim/coalesce/pretrim canaries: %s completed=%u/32 adjacent-four-chunk-groups=%u error-mask=0x%x protected-entries=%llu expected-public-calls=%llu; observed adjacency, not internal-bin execution or website stability proof",reclaimOkay?"PASS":"FAIL",reclaim.completed,reclaim.adjacentGroups,reclaim.errorMask,(unsigned long long)reclaimCalls,(unsigned long long)reclaim.calls);
+#else
+  // The old okay() also requires 65568-byte musl chunk spacing. Native libc
+  // owns a different allocator: retain every allocation/data/cleanup check,
+  // but never interpret that legacy spacing as its internal bin coverage.
+  const bool reclaimOkay=reclaim.completed==32 && reclaim.errorMask==0;
+  log("Native BSD allocator reuse canaries: %s completed=%u/32 error-mask=0x%x public-calls=%llu; behavioral checks, no internal bin/lock coverage claim",reclaimOkay?"PASS":"FAIL",reclaim.completed,reclaim.errorMask,(unsigned long long)reclaim.calls);
+#endif
   if(!reclaimOkay){stopWatchdog();return false;}
   State state;Worker workers[8]{};pthread_t threads[8]{};unsigned count=0;
+#ifndef ORBISFOX_HOMEBREW_SDK
   const uint64_t before=native_allocator_entry_count();
+#endif
   for(;count<8;++count){workers[count]={&state,count};if(pthread_create(&threads[count],nullptr,work,&workers[count])!=0)break;}
   if(count!=8){
     // Supply sentinel for missing ring producers, so existing workers join.
@@ -105,6 +125,7 @@ bool probe_native_allocator(){
     okay=(state.completed[i]==512)&&okay;
     log("Native allocator worker[%u]: native-id=%d completed=%u/512 error-mask=0x%x",i,state.ids[i],state.completed[i],state.errors[i]);}
   for(auto& slot:state.slots){void* leftover=slot.exchange(nullptr);if(leftover&&leftover!=reinterpret_cast<void*>(1))free(leftover);}
+#ifndef ORBISFOX_HOMEBREW_SDK
   const uint64_t calls=native_allocator_entry_count()-before;okay=okay&&!state.failed.load()&&calls>=8*512*5;
   int sdkCounter=-1;memcpy(&sdkCounter,__libc+12,sizeof(sdkCounter));
   const auto memory=sdk_direct_heap_stats();
@@ -112,6 +133,10 @@ bool probe_native_allocator(){
   log("SDK mapped-shrink realloc copy bounds: applied=%llu; medium50201-byte shrink included",(unsigned long long)native_allocator_realloc_copy_fix_count());
   log("Native allocator ownership / 8-thread pattern-realloc-calloc-alignment-handoff: %s protected-entries=%llu SDK-libc+12-lock-gate=%d; private flags unchanged; bin/mmap boundary229360/229361/229376 shrink-grow-zero canaries included",okay?"PASS":"FAIL",(unsigned long long)calls,sdkCounter);
   if(okay)configure_native_allocator_bin_audit(false); // Keep realloc/copy/discard checks; avoid per-malloc/free full scans while browsing.
+#else
+  okay=okay&&!state.failed.load();
+  log("Native BSD allocator / 8-thread pattern-realloc-calloc-alignment-handoff: %s; 512 iterations per worker, real SDK imports; no legacy protected-entry counters",okay?"PASS":"FAIL");
+#endif
   stopWatchdog();return okay;
 }
 }

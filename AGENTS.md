@@ -96,8 +96,12 @@ make source-release                  # source only; does not upload/publish
    or APIs off-main. POD scene + bounded command queue only. Frame mailbox has
    exclusive writer/mailbox/reader ownership; copy/render/scanout outside its
    short swap lock. Join workers before releasing buffers/services.
-7. Native IME only; cancel remains cancel. Pause worker scanout during IME and
-   preserve fresh-input gating. Do not introduce reentrant input dispatch.
+7. Custom keyboard is the authorized default in this dev checkout; keep Sony's
+   backend for later repair. Use Gecko editors on main, mask passwords, validate
+   page-target ownership and gate all held buttons on close. R2 is Enter while
+   typing, not Forward. Cancel discards chrome drafts; live page edits remain.
+   Retained native IME must still pause scanout and preserve fresh-input gating.
+   Do not introduce nested event pumping or reentrant input dispatch.
 8. Native clocks must honor SDK-to-firmware clock-ID translation; failed queries
    stay failures. CPU count uses the genuine thread-affinity API, with a
    conservative original-SDK fallback. Inspect real firmware return types.

@@ -44,6 +44,18 @@ for(let cycle=0;cycle<32;cycle++) {
   assert.deepEqual(array(ctrl.update(M.Buttons.down,100000)),["down"]);
   assert.deepEqual(array(ctrl.update(M.Buttons.left|M.Buttons.right,100001)),[]);
   ctrl.update(0,100002);assert.deepEqual(array(ctrl.update(M.Buttons.menu,100003)),["menu"]);
+  const keyboard=new M.Controller();
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,0)),['address']);
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,1000,true)),[],'held opener is quarantined');
+  keyboard.update(0,1010,true);assert.deepEqual(array(keyboard.update(M.Buttons.address,1020,true)),['address']);
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,1419,true)),[]);
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,1420,true)),['address']);
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,100000,true)),['address'],'repeat once, never burst');
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,100001,false)),[],'held Delete cannot reopen');
+  keyboard.update(0,100002,true);assert.deepEqual(array(keyboard.update(M.Buttons.forward,100003,true)),['forward']);
+  assert.deepEqual(array(keyboard.update(M.Buttons.forward,200003,true)),[],'held R2 never repeats Enter');
+  assert.deepEqual(array(keyboard.update(M.Buttons.forward,200004,false)),[],'held Enter cannot navigate Forward');
+  keyboard.update(0,200005);assert.deepEqual(array(keyboard.update(M.Buttons.forward,200006)),['forward']);
 }
 const featureContext=vm.createContext({});vm.runInContext(source,featureContext);const model=featureContext.OrbisFoxShellModel;
 const saved=[];const bookmarks=new model.Bookmarks('[]',text=>saved.push(text));

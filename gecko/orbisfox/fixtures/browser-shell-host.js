@@ -163,6 +163,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
   const CHROME="chrome://orbisfox/content/browser.xhtml",timer=Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
   let chrome=null,ui=null,alive=true,network=null,https=null,ticks=0,serial=0,active=null,controls=null,middleLink=null,removeFullscreen=null;
   let keyboardPending=null,textTarget=null,scrollFailures=0,lastScroll="",scrollReports=0;
+  let keyboardReleasePending=false,pointerRequested=true;
   let lastX=host.cursorX,lastY=host.cursorY,lastButtons=0,lastDiagnostics="",diagnosticText="",lastNativeScene="";
   const tabs=[],started=Date.now();let tabMutation=false,bookmarks=null,history=null,settings=null,settingsAvailable=false;
   let closedTabs=null,lastSecurity=null,pendingSession=null,webWasReady=false,lastSession=null,sessionFailures=0;
@@ -411,7 +412,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     dispose(tab);host.log("Browser UI: real tab closed "+id);return true;
   });
   const validField=field=>field?.isConnected&&field.ownerDocument?.nodePrincipal.isSystemPrincipal===false&&!field.disabled&&!field.readOnly&&
-    (field.localName==="textarea"||field.localName==="input"&&["text","search","email","url","tel"].includes(field.type));
+    (field.localName==="textarea"||field.localName==="input"&&["text","search","email","url","tel","password"].includes(field.type));
   const editClickedField=()=>action(()=>{
     if(!active?.nav||!ui.canScroll()||ui.isEditing())return false;
     const rect=active.element.getBoundingClientRect();let doc=active.nav.document;
@@ -419,11 +420,59 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     for(let depth=0;depth<8&&hit&&["iframe","frame"].includes(hit.localName);++depth){const r=hit.getBoundingClientRect();x-=r.left;y-=r.top;doc=hit.contentDocument;if(!doc)return false;hit=doc.elementFromPoint(x,y);}
     const field=doc.activeElement;
     if(!validField(field)||hit!==field||field.value.length>512)return false;
-    textTarget={tab:active,field,document:doc,draft:field.value};ui.editText(field.value);return true;
+    textTarget={tab:active,field,document:doc,rootDocument:active.nav.document,draft:field.value};
+    ui.editText(field.value,{password:field.type==='password',multiline:field.localName==='textarea',maxLength:field.maxLength,
+      start:field.selectionStart??field.value.length,end:field.selectionEnd??field.value.length});return true;
+  });
+  const updateText=(text,start,end)=>{
+    let result=false;
+    const okay=action(()=>{
+      const target=textTarget,field=target?.field;
+      if(!target||target.tab!==active||active.nav.document!==target.rootDocument||!validField(field)||field.ownerDocument!==target.document||
+         target.document.defaultView?.document!==target.document||target.document.defaultView?.top!==target.tab.element.contentWindow||
+         field.value!==target.draft||typeof text!=='string'||text.length>512||(field.maxLength>=0&&text.length>field.maxLength&&text.length>=target.draft.length)||
+         !Number.isInteger(start)||!Number.isInteger(end)||start<0||end<start||end>text.length)
+        throw new Error('Page text target changed; text not applied');
+      // Target the field's real editor: refocusing it per key would fire page focus/blur handlers.
+      const editor=field.editor;
+      if(!editor||editor.document!==target.document||target.document.activeElement!==field)throw new Error('Page text editor changed; text not applied');
+      let prefix=0,suffix=0;const old=target.draft;
+      while(prefix<old.length&&prefix<text.length&&old[prefix]===text[prefix])++prefix;
+      if(prefix>0&&/[\uD800-\uDBFF]/.test(old[prefix-1])&&(/[\uDC00-\uDFFF]/.test(old[prefix])||/[\uDC00-\uDFFF]/.test(text[prefix])))--prefix;
+      while(suffix<old.length-prefix&&suffix<text.length-prefix&&old[old.length-1-suffix]===text[text.length-1-suffix])++suffix;
+      if(suffix>0&&/[\uDC00-\uDFFF]/.test(old[old.length-suffix]))--suffix;
+      if(text!==old){
+        let insert=text.slice(prefix,text.length-suffix);
+        if(field.type==='email'){editor.selectAll();insert=text;}else field.setSelectionRange(prefix,old.length-suffix);
+        if(insert)editor.insertText(insert);else editor.deleteSelection(Ci.nsIEditor.eNone,Ci.nsIEditor.eStrip);
+      }
+      if(!validField(field)||active.nav.document!==target.rootDocument||target.document.defaultView?.document!==target.document||
+         target.document.activeElement!==field||field.value.length>512)
+        throw new Error('Page text target changed during input');
+      target.draft=field.value;
+      if(field.type!=='email'&&field.value===text)field.setSelectionRange(start,end);
+      result={value:field.value,start:field.selectionStart??field.value.length,end:field.selectionEnd??field.value.length};
+      return true;
+    });
+    if(!okay)textTarget=null;
+    return okay?result:false;
+  };
+  const enterText=()=>action(()=>{
+    const target=textTarget,field=target?.field;
+    if(!target||target.tab!==active||active.nav.document!==target.rootDocument||!validField(field)||field.ownerDocument!==target.document||
+       target.document.defaultView?.document!==target.document||target.document.defaultView?.top!==target.tab.element.contentWindow||
+       target.document.activeElement!==field||field.value!==target.draft)
+      throw new Error('Page text target changed; Enter not sent');
+    field.focus();
+    // Focus handlers can navigate or replace the target before trusted keyboard dispatch.
+    if(textTarget!==target||active!==target.tab||active.nav.document!==target.rootDocument||!validField(field)||field.ownerDocument!==target.document||
+       target.document.defaultView?.document!==target.document||target.document.defaultView?.top!==target.tab.element.contentWindow||
+       target.document.activeElement!==field||field.value!==target.draft)throw new Error('Page text target changed; Enter not sent');
+    host.sendEnter();textTarget=null;return true;
   });
   const commitText=text=>action(()=>{
     const target=textTarget;
-    if(!target||target.tab!==active||!validField(target.field)||target.field.ownerDocument!==target.document||target.field.value!==target.draft||typeof text!=="string"||text.length>512)
+    if(!target||target.tab!==active||active.nav.document!==target.rootDocument||!validField(target.field)||target.field.ownerDocument!==target.document||target.field.value!==target.draft||typeof text!=="string"||text.length>512)
       throw new Error("Page text target changed; text not applied");
     target.field.focus();target.field.select();
     const enabled=target.document.defaultView.windowUtils.sendContentCommandEvent("insertText",null,text);
@@ -459,7 +508,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
       try {
         ++ticks;
         if(ui&&host.takeNativeChromeAction)for(let i=0;i<16;++i){const command=host.takeNativeChromeAction();if(!command)break;
-          host.log('Native chrome: dequeued '+command+' handled='+ui.nativeCommand(command));lastNativeScene='';if(!alive)break;}
+          host.log('Native chrome: dequeued '+command+' handled='+(!keyboardReleasePending&&ui.nativeCommand(command)));lastNativeScene='';if(!alive)break;}
         if(!alive||!host.pumpFrame()){alive=false;return;}
         if(!ui){
           const win=chrome.docShell.domWindow,doc=win.document;
@@ -499,7 +548,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
             zoomValue:()=>active?.zoom||100,zoom:delta=>action(()=>{if(!active||![-10,0,10].includes(delta))throw Error('Invalid zoom action');const zoom=Math.max(50,Math.min(200,delta===0?settings.snapshot().defaultZoom:active.zoom+delta));const context=active.element.frameLoader?.browsingContext;if(!context)throw Error('Page zoom unavailable');context.fullZoom=zoom/100;active.zoom=zoom;return true;}),
             find:(text,backwards=false)=>action(()=>{if(typeof text!=='string'||!text.trim()||text.length>512)throw Error('Enter text to find');const finder=active.nav.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIWebBrowserFind);finder.searchString=text;finder.wrapFind=true;finder.findBackwards=!!backwards;const found=finder.findNext();active.model.message=found?'Match found':'No match found';return found;}),
             exitContentFullscreen:()=>action(()=>{chrome.docShell.domWindow.windowUtils.exitFullscreen();return true;}),
-            escape:()=>action(()=>{host.sendEscape();return true;}),pointer:value=>host.setPointerInputEnabled(value),
+            escape:()=>action(()=>{host.sendEscape();return true;}),pointer:value=>{pointerRequested=value;host.setPointerInputEnabled(value&&!keyboardReleasePending);},
             bookmarks:()=>bookmarks?.snapshot()||[],bookmarkRevision:()=>bookmarks?.revision??-1,
             history:limit=>history?.snapshot(limit)||[],historyRevision:()=>history?.revision??-1,
             historyAvailable:()=>!!history,favicon:url=>icons.request(url),faviconRevision:()=>icons.revision,
@@ -524,7 +573,11 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
             }),
             openKeyboard:draft=>{const opened=host.openAddressKeyboard(draft);if(opened)keyboardPending="address";return opened;},
             openTextKeyboard:draft=>{const opened=host.openTextKeyboard(draft);if(opened)keyboardPending="text";return opened;},
-            keyboardConfirm:()=>host.keyboardConfirmButton,commitText,cancelText:()=>{textTarget=null;},
+            keyboardConfirm:()=>host.keyboardConfirmButton,commitText,updateText,enterText,cancelText:()=>{textTarget=null;},
+            keyboardActive:enabled=>{
+              if(!enabled)keyboardReleasePending=true;
+              if(host.setNativeChromeState){host.setNativeChromeState('');lastNativeScene='';}
+            },
             newTab:()=>tabAction(()=>newTab()),selectTab:id=>tabAction(()=>selectTab(id)),closeTab:id=>tabAction(()=>closeTab(id)),
             relativeTab:delta=>tabAction(()=>selectTab(tabs[(tabs.indexOf(active)+delta+tabs.length)%tabs.length].id)),
             back:()=>action(()=>{if(active.nav.canGoBack){active.beforeLoad=documentID(active.nav.document);active.reported=false;active.nav.goBack(false,true);}}),
@@ -550,8 +603,12 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
         if(host.cursorX!==lastX||host.cursorY!==lastY)ui.pointerMoved();lastX=host.cursorX;lastY=host.cursorY;
         const releasedCross=(lastButtons&1)&&!(host.buttons&1)&&!(lastButtons&8190);lastButtons=host.buttons;
         // Controller edge history belongs to the shell, not to a switched tab.
-        for(const name of controls.update(host.buttons,Date.now()))ui.control(name);
-        if(releasedCross)editClickedField();
+        for(const name of controls.update(host.buttons,Date.now(),ui.isEditing())){
+          if(keyboardReleasePending)break;ui.control(name);
+        }
+        if(releasedCross&&!keyboardReleasePending)editClickedField();
+        // Held Enter/Close must never click the page or trigger navigation.
+        if(keyboardReleasePending&&host.buttons===0){keyboardReleasePending=false;host.setPointerInputEnabled(pointerRequested);lastNativeScene='';}
         if(keyboardPending&&host.keyboardStatus!==1){keyboardPending=null;ui.finishAddressKeyboard(host.keyboardStatus,host.keyboardText);}
         const dx=host.scrollX||0,dy=host.scrollY||0;
         if(dx||dy)try{
@@ -601,7 +658,7 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
         ui.renderTabs(tabs.map(tab=>({id:tab.id,...tab.model.snapshot(),favicon:icons.request(tab.model.location,tab.nav?.document)})),active.id);ui.update(active.model.snapshot(),diagnostic,{...gates(),bookmarksAvailable:!!bookmarks});
         if(active.model.security!==lastSecurity){lastSecurity=active.model.security;lastNativeScene="";}
         if(host.setNativeChromeState&&ui.nativeChromeScene&&(ticks%30===0||!lastNativeScene)){
-          const scene=ui.nativeChromeScene();if(scene&&scene!==lastNativeScene){host.setNativeChromeState(scene);lastNativeScene=scene;}}
+          const scene=keyboardReleasePending?'':ui.nativeChromeScene();if(typeof scene==='string'&&scene!==lastNativeScene){host.setNativeChromeState(scene);lastNativeScene=scene;}}
         if(diagnostic!==lastDiagnostics){host.log("Browser UI diagnostics: "+diagnostic.slice(0,3900));lastDiagnostics=diagnostic;}
         if(ticks%120===0)host.log("Browser UI heartbeat: ticks="+ticks+" frames="+host.framesPresented+" tabs="+tabs.length);
       }catch(error){host.log("ERROR: browser shell: "+error+"\n"+error.stack);alive=false;}

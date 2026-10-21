@@ -447,6 +447,28 @@ class GeckoAppTests(unittest.TestCase):
     def test_real_blob_font_platform_chooses_supported_freetype(self):
         subprocess.run(['python3', 'scripts/test-orbis-blob-font.py'], cwd=ROOT, check=True)
 
+    def test_custom_keyboard_chrome_assets_and_editor_boundary(self):
+        html = ET.parse(ROOT / 'gecko/orbisfox/fixtures/browser.xhtml')
+        elements = {element.get('id'): element for element in html.iter() if element.get('id')}
+        self.assertEqual(elements['keyboard-panel'].get('role'), 'dialog')
+        self.assertEqual(elements['keyboard-panel'].get('aria-modal'), 'true')
+        self.assertEqual(elements['keyboard-panel'].get('hidden'), 'hidden')
+        self.assertEqual(elements['keyboard-password'].get('type'), 'password')
+        self.assertEqual(elements['keyboard-draft'].get('maxlength'), '512')
+        ui = (ROOT / 'gecko/orbisfox/fixtures/browser-shell-ui.js').read_text()
+        host = (ROOT / 'gecko/orbisfox/fixtures/browser-shell-host.js').read_text()
+        self.assertNotIn('actions?.openTextKeyboard', ui)
+        self.assertIn("name==='forward')keyboardKey('Enter')", ui)
+        self.assertIn("keyboard.multiline){keyboardKey('New line')", ui)
+        self.assertIn('editor.insertText(insert)', host)
+        self.assertIn('editor.deleteSelection(Ci.nsIEditor.eNone,Ci.nsIEditor.eStrip)', host)
+        self.assertIn('host.sendEnter()', host)
+        self.assertIn('active.nav.document!==target.rootDocument', host)
+        self.assertIn('keyboardReleasePending&&host.buttons===0', host)
+        self.assertIn("'browser_keyboard_default': 'custom_chrome'", (ROOT / 'scripts/package-gecko.py').read_text())
+        interface = (ROOT / 'gecko/widget/orbis/nsIOrbisFoxHost.idl').read_text()
+        self.assertIn('void sendEnter();', interface)
+
     def test_native_ime_modal_release_gate_and_application_presentation_quiescence(self):
         gate = (ROOT / 'include/orbisfox/keyboard_launch.h').read_text()
         self.assertIn('if(++released_<2)return', gate)
@@ -877,7 +899,8 @@ class GeckoAppTests(unittest.TestCase):
         self.assertIn('#define _PR_ORBIS_STATIC_LINKER 1', header)
         self.assertNotIn('#define HAVE_DLL', header)
         self.assertNotIn('#define USE_DLFCN', header)
-        builder = (ROOT / 'scripts/build-gecko-app.py').read_text()
+        builder = (ROOT / 'scripts/gecko-link-inputs.py').read_text()
+        self.assertIn("LINK_INPUTS['collect_engine_inputs']", (ROOT / 'scripts/build-gecko-app.py').read_text())
         for target in ('pk11wrap_pk11wrap_static', 'softoken_softokn_static', 'freebl_freebl_static'):
             self.assertIn(target, builder)
         self.assertIn('Static NSS closure still contains its desktop freebl DLL loader', builder)

@@ -23,15 +23,24 @@ struct GuardedClockAttr {
 };
 }
 bool probe_gecko_clocks() {
+#ifdef ORBISFOX_HOMEBREW_SDK
+    static_assert(CLOCK_MONOTONIC == 4 && CLOCK_THREAD_CPUTIME_ID == 14 && CLOCK_PROCESS_CPUTIME_ID == 15);
+#else
     static_assert(CLOCK_MONOTONIC == 1 && CLOCK_THREAD_CPUTIME_ID == 3);
+#endif
     static_assert(sizeof(timespec) == 16 && sizeof(pthread_condattr_t) == 8);
     timespec resolution{}, realtime{}, process{}, thread{};
     const int res = clock_getres(CLOCK_MONOTONIC, &resolution);
     const int real = clock_gettime(CLOCK_REALTIME, &realtime);
     const int cpu = clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &process);
     const int thr = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &thread);
+#ifdef ORBISFOX_HOMEBREW_SDK
+    log("Gecko clock boundary: native BSD IDs monotonic4/process15/thread14 unchanged; res=%d realtime=%d process=%d thread=%d",
+        res, real, cpu, thr);
+#else
     log("Gecko clock boundary: SDK monotonic1->firmware4 process2->PROF2 thread3->14; res=%d realtime=%d process=%d thread=%d",
         res, real, cpu, thr);
+#endif
     // Optional CPU queries preserve real firmware errors; only required elapsed
     // and realtime clocks are gates for this offline browser milestone.
     if (res || real || resolution.tv_sec < 0 ||

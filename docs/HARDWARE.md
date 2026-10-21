@@ -31,6 +31,11 @@ The currently maintained implementation baseline is 0.68.
   allocation among JS/layout/render/decode exists yet.
 - 0.68 includes fullscreen, content color-scheme and CPU-affinity-count changes.
   They require broader console validation; do not claim they solved live playback.
+- The SDK dev browser's custom keyboard/R2 Enter path has host regression tests,
+  not console evidence. Verify layout, field focus, form submit/keydown cancel,
+  multiline newlines, password masking, confirm/close behavior and held-button
+  release gating with a fresh hash-bound native-SDK package. The protected main
+  browser and the standalone SDK Dialog Probe are different test targets.
 
 Early bring-up was reported on firmware 11.00 / GoldHEN v2.4b18.12. Do not
 infer that all later runs or every console model share that environment. Ask

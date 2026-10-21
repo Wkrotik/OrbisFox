@@ -1,6 +1,9 @@
 // Copyright OrbisFox contributors. Licensed under the ANGLE BSD-style license.
 #include "system_utils.h"
 #include <pthread.h>
+#ifdef ORBISFOX_HOMEBREW_SDK
+#include <pthread_np.h>
+#endif
 #include <time.h>
 
 namespace angle {

@@ -6,12 +6,12 @@ import importlib.util
 import json
 import os
 import runpy
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / 'build/gecko-app'
@@ -145,30 +145,107 @@ def preserved_baseline_digest():
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
 
 
+def native_sdk_inputs():
+    fetch = runpy.run_path(str(ROOT / 'scripts/fetch-homebrew-sdk.py'))
+    verified = fetch['verify_sdk']()
+    sdk = fetch['SDK']
+    converter = runpy.run_path(str(sdk / 'bin/orbis-elf2self'))
+    return {'path': sdk,
+            'identity': {key: verified[key] for key in ('version', 'revision', 'archive_sha256')},
+            'authinfo': converter['auth_info_type'](converter['AUTH_INFO']).hex()}
+
+
+def validate_native_codec_materials(app):
+    captured = app['isolated_software_codecs']
+    current = json.loads((ROOT / 'build/media-codecs/native-homebrew/build-report.json').read_text())
+    if current != captured:
+        raise RuntimeError('Native codec materials differ from the linked application report')
+    inputs = {
+        ROOT / 'build/media-codecs/native-homebrew/config.h': captured['config_sha256'],
+        ROOT / 'build/media-codecs/native-homebrew/config_components.h': captured['components_sha256'],
+        ROOT / '.deps/downloads/ffmpeg-9.0.2.tar.xz': captured['source_sha256'],
+        ROOT / 'scripts/build-media-codecs.py': captured['build_identity']['builder_sha256'],
+    }
+    for path, expected in inputs.items():
+        if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise RuntimeError('Native codec materials changed since application link: ' + str(path))
+
+
+def validate_application(app, build, sdk):
+    if (app.get('version') != VERSION or not app.get('final_engine_application_linked')
+            or not app.get('baseline_unchanged') or not app.get('upstream_static_nss_closure_verified')):
+        raise RuntimeError('Verified native final link required')
+    if app.get('sdk', 'openorbis') != sdk:
+        raise RuntimeError('Package SDK does not match application build')
+    native = native_sdk_inputs() if sdk == 'homebrew' else None
+    if native and (app.get('sdk_identity') != native['identity'] or
+                   app.get('legacy_allocator_stdio_mapping_interposition_excluded') is not True):
+        raise RuntimeError('Native SDK identity/runtime boundary differs from verified application')
+    elf = build / 'orbisfox.elf'
+    if (elf.is_symlink() or elf.stat().st_size != app['executable']['bytes'] or
+            hashlib.sha256(elf.read_bytes()).hexdigest() != app['executable']['sha256']):
+        raise RuntimeError('Native executable differs from verified build report')
+    if native:
+        for name, expected in app['runtime_source_sha256'].items():
+            source = ROOT / name
+            if not source.is_file() or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+                raise RuntimeError('Native application source changed since link: ' + name)
+        validate_native_codec_materials(app)
+    return native
+
+
+def native_package_report(report, app, native):
+    # Do not copy legacy musl/bin/mmap/stat/clock claims into this SDK lane.
+    keys = ('title', 'version', 'package', 'experimental_mesa', 'package_identity',
+            'binary_redistribution_signoff', 'self_authentication_metadata_verified',
+            'bytes', 'sha256', 'gecko_revision', 'native_full_gecko_linked', 'native_executable',
+            'gecko_resource_format', 'gecko_resource_archive', 'resource_archive_hardware_verified',
+            'sfo_category', 'common_dialog_ATTRIBUTE_system_assignment', 'resource_files',
+            'new_package_created', 'hardware_tested', 'html_rendered_on_console',
+            'baseline_0_11_unchanged', 'baseline_0_11_sha256', 'sandbox_enabled',
+            'swgl_included', 'videoout_frame_bridge_implemented', 'website_crashes_claimed_fixed',
+            'browser_keyboard_native_only', 'browser_keyboard_default',
+            'browser_custom_keyboard_hardware_verified')
+    result = {key: report[key] for key in keys}
+    result.update(sdk='homebrew', sdk_identity=native['identity'],
+                  self_authinfo=native['authinfo'],
+                  native_application_report_sha256=hashlib.sha256(
+                      (ROOT / 'build/gecko-app-homebrew/build-report.json').read_bytes()).hexdigest(),
+                  native_system_libc_heap_stdio_clock_imports_verified=
+                      app['native_system_libc_heap_stdio_clock_imports_verified'],
+                  legacy_allocator_stdio_mapping_interposition_excluded=True,
+                  ffmpeg_source_and_configuration_match_linked_application=True,
+                  native_cpp_shutdown_console_verified=False,
+                  profile='/data/orbisfox/homebrew-profile', cache='/data/orbisfox/homebrew-cache',
+                  scope='Isolated native-SDK SWGL test; no console, Mesa or binary redistribution certification')
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--resource-format', choices=('unpacked', 'omni'), default='unpacked',
                         help='omni is an opt-in packaging-only trial; console validation pending')
     parser.add_argument('--mesa', action='store_true', help='Separate experimental title, installer and profile')
+    parser.add_argument('--sdk', choices=('openorbis', 'homebrew'), default='openorbis')
     args = parser.parse_args(argv)
-    identity = IDENTITY['package_identity'](args.mesa)
+    identity = IDENTITY['package_identity'](args.mesa, args.sdk)
+    build_dir, dist_dir = IDENTITY['package_directories'](args.sdk)
+    BUILD, DIST = ROOT / build_dir, ROOT / dist_dir
+    native_sdk = args.sdk == 'homebrew'
     app = json.loads((BUILD / 'build-report.json').read_text())
-    if (app.get('version') != VERSION or not app.get('final_engine_application_linked')
-            or not app.get('baseline_unchanged') or not app.get('upstream_static_nss_closure_verified')):
-        raise RuntimeError('Verified native final link required')
+    native = validate_application(app, BUILD, args.sdk)
     if bool(app.get('experimental_native_mesa')) != args.mesa:
         raise RuntimeError('Package flavor does not match native Mesa build')
     if args.mesa and not app.get('experimental_native_mesa_final_link_verified'):
         raise RuntimeError('Verified native Mesa implementation required')
-    native_elf = BUILD / 'orbisfox.elf'
-    if (native_elf.stat().st_size != app['executable']['bytes']
-            or hashlib.sha256(native_elf.read_bytes()).hexdigest() != app['executable']['sha256']):
-        raise RuntimeError('Native executable differs from verified build report')
     baseline = preserved_baseline_digest()
     sdk = Path(os.environ.get('OO_PS4_TOOLCHAIN', ROOT / '.deps/OpenOrbis/PS4Toolchain')).resolve()
     tools = sdk / 'bin/linux'
     stage = BUILD / 'pkg'
-    shutil.rmtree(stage, ignore_errors=True)
+    if stage.is_symlink():
+        raise ValueError('Package staging directory must not be a symlink')
+    if stage.exists():
+        shutil.rmtree(stage)
     (stage / 'sce_sys').mkdir(parents=True)
     DIST.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, DOTNET_SYSTEM_GLOBALIZATION_INVARIANT='1',
@@ -189,15 +266,25 @@ def main(argv=None):
     subprocess.run([sys.executable, str(ROOT / 'scripts/test-cxx-guards.py')], check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/test-javascript.py')], check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/test-nspr-static.py')], check=True)
-    subprocess.run([sys.executable, str(ROOT / 'scripts/verify-startup.py'), str(BUILD / 'orbisfox.elf')], check=True)
-    subprocess.run([sys.executable, str(ROOT / 'scripts/verify-rust-abi.py'), str(BUILD / 'orbisfox.elf')], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/verify-startup.py'), str(BUILD / 'orbisfox.elf'),
+                    '--sdk', args.sdk], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/verify-rust-abi.py'), str(BUILD / 'orbisfox.elf'),
+                    '--sdk', args.sdk], check=True)
     PKG.verify_service_imports(BUILD / 'orbisfox.elf')
-    run('create-fself', f'-in={BUILD / "orbisfox.elf"}', f'-out={BUILD / "orbisfox.oelf"}',
-        '--eboot', 'eboot.bin', '--paid', '0x3800000000000035', '--authinfo', PKG.AUTHINFO)
-    sections = PKG.verify_oelf(BUILD / 'orbisfox.oelf')
-    self_metadata = PKG.verify_self(stage / 'eboot.bin', PKG.AUTHINFO, 0x3800000000000035)
+    if native_sdk:
+        subprocess.run([str(native['path'] / 'bin/orbis-elf2self'), '--paid', '0x3800000000000035',
+                        '--elf', str(BUILD / 'orbisfox.oelf'), str(BUILD / 'orbisfox.elf'),
+                        str(stage / 'eboot.bin')], cwd=stage, check=True)
+        sections = runpy.run_path(str(ROOT / 'scripts/build-homebrew-sdk-probe.py'))[
+            'verify_converted_elf'](BUILD / 'orbisfox.oelf')
+        authinfo = native['authinfo']
+    else:
+        run('create-fself', f'-in={BUILD / "orbisfox.elf"}', f'-out={BUILD / "orbisfox.oelf"}',
+            '--eboot', 'eboot.bin', '--paid', '0x3800000000000035', '--authinfo', PKG.AUTHINFO)
+        sections = PKG.verify_oelf(BUILD / 'orbisfox.oelf')
+        authinfo = PKG.AUTHINFO
+    self_metadata = PKG.verify_self(stage / 'eboot.bin', authinfo, 0x3800000000000035)
     sfo = 'sce_sys/param.sfo'
-    run('PkgTool.Core', 'sfo_new', sfo)
     entries = {
         'APP_TYPE': ('Integer', 4, '1'), 'APP_VER': ('Utf8', 8, VERSION),
         'ATTRIBUTE': ('Integer', 4, str(COMMON_DIALOG_ATTRIBUTE_SYSTEM)), 'CATEGORY': ('Utf8', 4, 'gd'),
@@ -206,8 +293,15 @@ def main(argv=None):
         'TITLE': ('Utf8', 128, identity['title']), 'TITLE_ID': ('Utf8', 12, identity['title_id']),
         'VERSION': ('Utf8', 8, VERSION),
     }
-    for key, (kind, size, value) in entries.items():
-        run('PkgTool.Core', 'sfo_setentry', sfo, key, '--type', kind, '--maxsize', size, '--value', value)
+    if native_sdk:
+        command = [str(native['path'] / 'bin/orbis-mksfo')]
+        for key, (kind, size, value) in entries.items():
+            command += ['-i', key + '=' + value] if kind == 'Integer' else ['-s', str(size), key + '=' + value]
+        subprocess.run([*command, sfo], cwd=stage, check=True)
+    else:
+        run('PkgTool.Core', 'sfo_new', sfo)
+        for key, (kind, size, value) in entries.items():
+            run('PkgTool.Core', 'sfo_setentry', sfo, key, '--type', kind, '--maxsize', size, '--value', value)
     PKG.prepare_artwork(stage)
     resources = stage_resources(ENGINE / 'dist/bin', stage / 'gecko')
     for source, destination in (
@@ -257,6 +351,14 @@ def main(argv=None):
         'ffmpeg-config-components.h': ROOT / 'build/media-codecs/native/config_components.h',
         'build-media-codecs.py': ROOT / 'scripts/build-media-codecs.py',
     }
+    if native_sdk:
+        for name in ('llvm-libcxx-license.txt', 'llvm-libcxxabi-license.txt', 'llvm-libunwind-license.txt'):
+            licenses[name] = Path(str(licenses[name]).replace('/llvm-runtimes/', '/llvm-runtimes-homebrew/'))
+        del licenses['musl-COPYRIGHT.txt']
+        licenses['native-sdk-notes.md'] = ROOT / 'docs/HOMEBREW_SDK.md'
+        licenses['native-service-declarations-GPL-3.0.txt'] = ROOT / '.deps/homebrew-service-headers/LICENSE'
+        for name in ('ffmpeg-build-report.json', 'ffmpeg-config.h', 'ffmpeg-config-components.h'):
+            codec_sources[name] = Path(str(codec_sources[name]).replace('/native/', '/native-homebrew/'))
     licenses.update(codec_sources)
     mesa_materials = None
     if args.mesa:
@@ -270,12 +372,20 @@ def main(argv=None):
     files = sorted(item.relative_to(stage).as_posix() for item in stage.rglob('*') if item.is_file())
     if any(any(character.isspace() for character in name) for name in files):
         raise ValueError('Package path contains whitespace')
-    run('create-gp4', '-out', 'project.gp4', f'--content-id={identity["content_id"]}',
-        '--files', 'eboot.bin sce_sys/param.sfo')
-    complete_gp4(stage / 'project.gp4', files)
-    run('PkgTool.Core', 'pkg_build', 'project.gp4', DIST)
     artifact = DIST / identity['package_name']
-    (DIST / (identity['content_id'] + '.pkg')).replace(artifact)
+    if native_sdk:
+        subprocess.run([str(native['path'] / 'bin/orbis-mkgp4'), '-c', identity['content_id'],
+                        '-o', 'project.gp4', 'eboot.bin', 'sce_sys/param.sfo'], cwd=stage, check=True)
+    else:
+        run('create-gp4', '-out', 'project.gp4', f'--content-id={identity["content_id"]}',
+            '--files', 'eboot.bin sce_sys/param.sfo')
+    complete_gp4(stage / 'project.gp4', files)
+    if native_sdk:
+        subprocess.run([str(native['path'] / 'bin/orbis-mkpkg'), '-o', str(artifact), 'project.gp4'],
+                       cwd=stage, check=True)
+    else:
+        run('PkgTool.Core', 'pkg_build', 'project.gp4', DIST)
+        (DIST / (identity['content_id'] + '.pkg')).replace(artifact)
     run('PkgTool.Core', 'pkg_validate', artifact)
     shutil.copyfile(BUILD / 'orbisfox.elf', DIST / 'orbisfox.elf')
     unchanged = preserved_baseline_digest() == baseline
@@ -396,7 +506,9 @@ def main(argv=None):
         'GC_direct_memory_excludes_shrinkable_buffers_files_stacks_and_JIT': True,
         'GC_direct_chunk_hardware_verified': False,
         'profile_saved_preferences_explicitly_loaded_before_browser_UI': True,
-        'browser_keyboard_native_only': True,
+        'browser_keyboard_native_only': False,
+        'browser_keyboard_default': 'custom_chrome',
+        'browser_custom_keyboard_hardware_verified': False,
         'settings_explicit_blocking_profile_preferences_save': True,
         'native_mouse_moves_preserve_held_primary_button': True,
         'allocator_bin_audit_hardware_verified': False,
@@ -446,8 +558,11 @@ def main(argv=None):
         'runtime_capture': '/data/orbisfox/runs/<run-id>/gecko-fixture-frame.bgra',
         'scope': 'Development browser with gated HTTP/HTTPS and optional heap diagnostics; no production security or website stability certification',
     }
+    if native_sdk:
+        report = native_package_report(report, app, native)
+        report['oelf_layout_verified'] = sections
     (DIST / 'build-report.json').write_text(json.dumps(report, indent=2) + '\n')
-    subprocess.run([sys.executable, ROOT / 'scripts/verify-gecko-package.py'], check=True)
+    subprocess.run([sys.executable, ROOT / 'scripts/verify-gecko-package.py', '--sdk', args.sdk], check=True)
     print(json.dumps(json.loads((DIST / 'build-report.json').read_text()), indent=2))
     return 0
 

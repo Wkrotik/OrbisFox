@@ -118,6 +118,40 @@ class UploadTests(unittest.TestCase):
         self.assertLess(ftp.events.index(('verify', '.' + name + '.uploading')),
                         ftp.events.index(('delete', name)))
 
+    def test_homebrew_sdk_probe_preserves_every_other_installer(self):
+        name = upload.HOMEBREW_SDK_PROBE_PACKAGE
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / name
+            path.write_bytes(b'new SDK runtime probe')
+            ftp = FakeFTP(name)
+            protected = {key: b'protected' for key in
+                         (*upload.PACKAGE_NAMES, upload.LEGACY_MAIN_PACKAGE) if key != name}
+            ftp.files.update(protected)
+            upload.upload_packages(ftp, [path])
+        for key, value in protected.items():
+            self.assertEqual(ftp.files[key], value)
+            self.assertNotIn(('delete', key), ftp.events)
+        self.assertEqual(ftp.files[name], b'new SDK runtime probe')
+        self.assertLess(ftp.events.index(('verify', '.' + name + '.uploading')),
+                        ftp.events.index(('delete', name)))
+
+    def test_native_browser_upload_preserves_every_other_installer(self):
+        name = upload.HOMEBREW_BROWSER_PACKAGE
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / name
+            path.write_bytes(b'native SDK browser')
+            ftp = FakeFTP(name)
+            protected = {key: b'protected' for key in
+                         (*upload.PACKAGE_NAMES, upload.LEGACY_MAIN_PACKAGE) if key != name}
+            ftp.files.update(protected)
+            upload.upload_packages(ftp, [path])
+        for key, value in protected.items():
+            self.assertEqual(ftp.files[key], value)
+            self.assertNotIn(('delete', key), ftp.events)
+        self.assertEqual(ftp.files[name], b'native SDK browser')
+        self.assertLess(ftp.events.index(('verify', '.' + name + '.uploading')),
+                        ftp.events.index(('delete', name)))
+
     def test_resume_verifies_complete_file_before_replacement(self):
         name = upload.PACKAGE_NAMES[0]
         temporary = '.' + name + '.uploading'

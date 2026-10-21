@@ -1,4 +1,7 @@
-#define _POSIX_C_SOURCE 200809L
+// Native FreeBSD headers expose MAP_ANON in their default BSD environment.
+#if !defined(ORBISFOX_HOMEBREW_SDK)
+#  define _POSIX_C_SOURCE 200809L
+#endif
 #include "orbisfox/rust_runtime.h"
 #include "orbisfox/presenter.h"
 #include <stdint.h>

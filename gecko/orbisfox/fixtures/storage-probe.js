@@ -6,7 +6,8 @@ function verifyTrustedPersistentStorage(Cc, Ci, host) {
   const service = Cc["@mozilla.org/storage/service;1"].getService(Ci.mozIStorageService);
   const file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
   const profile = globalThis.ORBISFOX_PROFILE_PATH || "/data/orbisfox/gecko-profile";
-  if (profile !== "/data/orbisfox/gecko-profile" && profile !== "/data/orbisfox/mesa-profile")
+  if (profile !== "/data/orbisfox/gecko-profile" && profile !== "/data/orbisfox/mesa-profile" &&
+      profile !== "/data/orbisfox/homebrew-profile")
     throw new Error("Invalid trusted storage probe profile");
   file.initWithPath(profile + "/mozstorage-bringup.sqlite");
   let connection = null;

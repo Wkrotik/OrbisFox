@@ -1,5 +1,6 @@
 #ifdef ORBISFOX_FULL_GECKO
 #include "orbisfox/native_allocator.h"
+#ifndef ORBISFOX_HOMEBREW_SDK
 #include "orbisfox/heap_expand_fallback.h"
 #include <sys/types.h>
 #ifdef ORBISFOX_NATIVE_DIRECT_HEAP
@@ -451,4 +452,5 @@ extern "C" void* __wrap_valloc(size_t size){
   const int page=getpagesize();if(page<=0||!powerAlignment(size_t(page))){errno=EINVAL;return nullptr;}
   lock.extra=size_t(page);return lock.result(diagnostics.allocate(size,size_t(page),caller(__builtin_return_address(0)),[](size_t n){return __real_valloc(n);}));
 }
-#endif
+#endif // ORBISFOX_HOMEBREW_SDK: native system libc owns its heap and locks.
+#endif // ORBISFOX_FULL_GECKO

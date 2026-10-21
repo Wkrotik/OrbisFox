@@ -148,20 +148,96 @@ function initializeOrbisFoxShell() {
   const focus=e=>{focused?.removeAttribute("data-focused");focused=e;if(e){setPointer(false);e.setAttribute("data-focused","true");e.focus();}};
   const closePanels=()=>{for(const id of panels)$(id).hidden=true;attribute($("site-identity"),"aria-expanded","false");clearConfirmUntil=0;};
   const page=()=>{closePanels();if(latest)$("address").value=latest.location===OrbisFoxShellModel.HOME?"":latest.location;focused?.removeAttribute("data-focused");focused=null;setPointer(true);api.contentElement().focus();};
-  const keyboardHint=()=>actions?.keyboardConfirm?.()===2?"PS4 keyboard: Circle selects/confirms · Cross cancels":
-    actions?.keyboardConfirm?.()===1?"PS4 keyboard: Cross selects/confirms · Circle cancels":"PS4 keyboard: follow the dialog's confirm/cancel labels";
-  const edit=(kind="address",text=$("address").value)=>{
-    if(nativeEditing)return;if(fullscreen)setFullscreen(false);closePanels();editing=kind;
-    if(kind==="text"?actions?.openTextKeyboard?.(text):actions?.openKeyboard?.(text)){
-      nativeEditing=true;setPointer(false);$("focus-hint").textContent=keyboardHint();return;
+  let keyboard=null,keyRow=1,keyColumn=0,shift=false,symbols=false;
+  const keyRows=[];let draft=$('keyboard-draft');
+  const keyboardRows=()=>[
+    [...(symbols?'!@#$%^&*()':'1234567890')],
+    [...(symbols?'[]{}<>_=+~':shift?'QWERTYUIOP':'qwertyuiop')],
+    [...(symbols?'\\|;:`"\'?,/':shift?'ASDFGHJKL':'asdfghjkl')],
+    [...(symbols?'-.:/?@&#%':shift?'ZXCVBNM.-':'zxcvbnm.-')],
+    ['Shift',symbols?'ABC':'Symbols','Space','Delete','←','→','Clear','Enter','Done','Close']
+  ];
+  const selectKey=()=>{for(const [r,row] of keyRows.entries())for(const [c,button] of row.entries()){
+    if(r===keyRow&&c===keyColumn)button.setAttribute('data-focused','true');else button.removeAttribute('data-focused');}};
+  const renderKeyboard=()=>{
+    empty($('keyboard-keys'));keyRows.length=0;
+    for(const row of keyboardRows()){
+      const element=document.createElement('div');element.className='keyboard-row';const buttons=[];
+      for(const label of row){const button=document.createElement('button');button.textContent=label;button.type='button';
+        button.addEventListener('mousedown',event=>event.preventDefault());button.addEventListener('click',()=>keyboardKey(label));element.appendChild(button);buttons.push(button);}
+      $('keyboard-keys').appendChild(element);keyRows.push(buttons);
     }
-    if(kind==="text")actions?.cancelText();page();$("status").textContent="PS4 keyboard unavailable.";
+    keyColumn=Math.min(keyColumn,keyRows[keyRow].length-1);selectKey();draft.focus();
   };
+  const closeKeyboard=()=>{
+    if(!keyboard)return;keyboard=null;$('keyboard-draft').value='';$('keyboard-password').value='';$('keyboard-panel').hidden=true;empty($('keyboard-keys'));keyRows.length=0;
+    nativeEditing=false;actions?.keyboardActive?.(false);
+  };
+  const applyDraft=()=>{
+    if(!keyboard)return;
+    if(editing==='text'){
+      const result=actions?.updateText?.(draft.value,draft.selectionStart,draft.selectionEnd);
+      if(!result){closeKeyboard();actions?.cancelText();page();return;}
+      draft.value=result.value;draft.setSelectionRange(result.start,result.end);
+    }else if(editing==='address')$('address').value=draft.value;
+    else if(editing==='search')$('home-search').value=draft.value;
+    else $('find-text').value=draft.value;
+    draft.focus();
+  };
+  // shortcut: code-point movement, not full grapheme/IME composition; extend with multilingual input.
+  const previousCharacter=(value,index)=>index-(index>1&&/[\uDC00-\uDFFF]/.test(value[index-1])&&/[\uD800-\uDBFF]/.test(value[index-2])?2:1);
+  const nextCharacter=(value,index)=>index+(value.codePointAt(index)>0xffff?2:1);
+  const keyboardKey=label=>{
+    if(!keyboard)return;
+    if(label==='Close'){cancel();return;}
+    if(label==='Enter'){
+      if(editing!=='text'){go(draft.value);return;}
+      if(keyboard.multiline){keyboardKey('New line');return;}
+      closeKeyboard();actions?.enterText?.();actions?.cancelText();page();return;
+    }
+    if(label==='Done'){if(editing==='text'){closeKeyboard();actions?.cancelText();page();}else go(draft.value);return;}
+    if(label==='Shift'){shift=!shift;renderKeyboard();return;}
+    if(label==='Symbols'||label==='ABC'){symbols=!symbols;renderKeyboard();return;}
+    let start=draft.selectionStart,end=draft.selectionEnd,value=draft.value;
+    if(label==='←'||label==='→'){
+      const position=label==='←'?(start!==end?start:Math.max(0,previousCharacter(value,start))):(start!==end?end:Math.min(value.length,nextCharacter(value,end)));
+      draft.setSelectionRange(position,position);draft.focus();return;
+    }
+    if(label==='Clear'){start=0;end=value.length;}
+    if(label==='Delete'&&start===end)start=Math.max(0,previousCharacter(value,start));
+    const insert=label==='Space'?' ':label==='Delete'||label==='Clear'?'':label==='New line'?'\n':label;
+    const length=value.length-(end-start)+insert.length;
+    if(length>keyboard.limit&&length>=value.length)return;
+    draft.value=value.slice(0,start)+insert+value.slice(end);draft.setSelectionRange(start+insert.length,start+insert.length);applyDraft();
+  };
+  const edit=(kind="address",value=$("address").value,options={})=>{
+    if(nativeEditing||!actions)return;if(fullscreen)setFullscreen(false);closePanels();editing=kind;
+    keyboard={...options,original:kind==='text'?'':value,limit:Math.min(512,options.maxLength>=0?options.maxLength:512)};
+    nativeEditing=true;shift=false;symbols=false;keyRow=1;keyColumn=0;
+    $('keyboard-draft').hidden=!!options.password;$('keyboard-password').hidden=!options.password;
+    draft=$(options.password?'keyboard-password':'keyboard-draft');draft.maxLength=keyboard.limit;draft.value=value;
+    text($('keyboard-title'),kind==='text'?'Page text':kind==='find'?'Find in page':kind==='search'?'Search':'Address / search');
+    text($('keyboard-note'),kind==='text'?'Edits reach the page immediately. Circle closes without undoing them.':'Enter submits. Circle discards this draft.');
+    $('keyboard-panel').hidden=false;setPointer(false);actions.keyboardActive?.(true);renderKeyboard();draft.focus();
+    draft.setSelectionRange(options.start??0,options.end??value.length);
+  };
+  for(const id of ['keyboard-draft','keyboard-password'])$(id).addEventListener('input',()=>applyDraft());
+  document.addEventListener('keydown',event=>{
+    if(!keyboard)return;
+    if(event.key==='Escape'){event.preventDefault();cancel();}
+    else if(event.key==='Enter'){event.preventDefault();const key=keyRows.flat().find(button=>button===document.activeElement);
+      keyboardKey(key?key.textContent:event.shiftKey&&keyboard.multiline?'New line':'Enter');}
+    else if(event.key==='Tab'){event.preventDefault();const controls=[draft,...keyRows.flat()],index=controls.indexOf(document.activeElement);
+      controls[(index+(event.shiftKey?-1:1)+controls.length)%controls.length].focus();}
+  },true);
   const find=(backwards=false)=>{const value=$("find-text").value;if(!value.trim()){text($("find-status"),'Enter text to find');return;}const found=actions?.find?.(value,backwards)===true;text($("find-status"),found?'Match found':'No match found');};
   const showFind=()=>{if(fullscreen)setFullscreen(false);page();$("find-bar").hidden=false;edit('find',$("find-text").value);};
   const closeFind=()=>{$("find-bar").hidden=true;page();};
-  const go=value=>{if(!actions)return;if(editing==='find'){$("find-text").value=value;page();find();return;}const okay=editing==="text"?actions.commitText(value):editing==="search"?actions.search(value):actions.navigate(value);if(okay)page();};
-  const cancel=()=>{if(editing==="text")actions?.cancelText();page();};
+  const go=value=>{if(!actions)return;if(editing==='find'){$("find-text").value=value;closeKeyboard();page();find();return;}const okay=editing==="text"?actions.commitText(value):editing==="search"?actions.search(value):actions.navigate(value);if(okay){closeKeyboard();page();}};
+  const cancel=()=>{
+    if(keyboard&&editing!=='text')$(editing==='address'?'address':editing==='search'?'home-search':'find-text').value=keyboard.original;
+    closeKeyboard();if(editing==="text")actions?.cancelText();page();
+  };
   const escape=()=>{if(fullscreen){setFullscreen(false);page();}else if(panels.some(id=>!$(id).hidden))cancel();else if(!$("find-bar").hidden)closeFind();else{page();actions?.escape?.();}};
   const menu=()=>{if(fullscreen){setFullscreen(false);page();return;}const open=!$("menu-panel").hidden;closePanels();if(open){page();return;}$("menu-panel").hidden=false;focus(visibleControls()[0]);};
   const command=name=>{
@@ -283,7 +359,7 @@ function initializeOrbisFoxShell() {
       property($("close-tab"),'disabled',tabs.length<=1);
     },
     nativeChromeScene(){
-      if(!actions||!labels.has(selected))return null;
+      if(nativeEditing)return '';if(!actions||!labels.has(selected))return null;
       const ids=[...labels.keys()],controls=[];
       const add=(element,code)=>{if(!element?.getBoundingClientRect)return;const r=element.getBoundingClientRect();
         const x=Math.round(r.left),y=Math.round(r.top),w=Math.round(r.width),h=Math.round(r.height);
@@ -310,14 +386,28 @@ function initializeOrbisFoxShell() {
       target.scrollBy(dx,dy);return true;
     },
     isEditing(){return nativeEditing;},
-    editText(text){edit("text",text);},
+    editText(text,options={}){edit("text",text,options);},
     finishAddressKeyboard(status,text){
-      if(!nativeEditing)return;nativeEditing=false;
+      if(!nativeEditing||keyboard)return;nativeEditing=false;
       if(status===2&&typeof text==="string"&&text.length<=512)go(text);
       else cancel();
     },
     pointerMoved(){if(nativeEditing||pointer)return;setPointer(true);focused?.removeAttribute("data-focused");focused=null;},
     control(name){
+      if(keyboard){
+        if(name==='cancel'||name==='menu')cancel();
+        else if(name==='cross')keyboardKey(keyRows[keyRow][keyColumn].textContent);
+        else if(name==='address')keyboardKey('Delete');else if(name==='reload')keyboardKey('Space');
+        else if(name==='forward')keyboardKey('Enter');
+        else if(name==='previousTab'||name==='nextTab')keyboardKey(name==='previousTab'?'←':'→');
+        else if(['left','right','up','down'].includes(name)){
+          if(name==='up'||name==='down'){
+            keyRow=(keyRow+(name==='up'?-1:1)+keyRows.length)%keyRows.length;keyColumn=Math.min(keyColumn,keyRows[keyRow].length-1);
+          }else keyColumn=(keyColumn+(name==='left'?-1:1)+keyRows[keyRow].length)%keyRows[keyRow].length;
+          selectKey();
+        }
+        return;
+      }
       if(nativeEditing)return;
       if(["left","right","up","down"].includes(name)){
         if(focused===$("default-zoom")&&(name==="left"||name==="right")){saveSettings({defaultZoom:Math.max(50,Math.min(200,Number(focused.value)+(name==='left'?-10:10)))});return;}
@@ -356,7 +446,7 @@ function initializeOrbisFoxShell() {
       // Gecko reports only after every cleaner settles; never leave the user guessing.
       if(clearPendingSince&&Date.now()-clearPendingSince>60000){clearPendingSince=0;text($("settings-status"),"Clearing is taking longer than expected. You can keep browsing.");}
     },
-    destroy(){$("find-bar").hidden=true;setFullscreen(false);actions=null;nativeEditing=false;closePanels();focused=null;labels.clear();contents.clear();}
+    destroy(){closeKeyboard();actions?.cancelText();$("find-bar").hidden=true;setFullscreen(false);actions=null;nativeEditing=false;closePanels();focused=null;labels.clear();contents.clear();}
   });
   window.OrbisFoxShell=api;
 }

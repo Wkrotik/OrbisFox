@@ -6,7 +6,7 @@ var OrbisFoxShellModel = (() => {
   const HTTPS = "https://example.com/";
   const GOOGLE = "https://www.google.com/";
   const Buttons = Object.freeze({cross:1, reload:2, address:4, menu:8, cancel:16,
-    left:32, right:64, up:128, down:256, previousTab:512, nextTab:1024});
+    left:32, right:64, up:128, down:256, previousTab:512, nextTab:1024, forward:2048});
   function resolveAddress(text, gates = {}) {
     if (typeof text !== "string" || text.length > 2048 || /[\x00-\x1f\x7f]/.test(text))
       throw new Error("Invalid address");
@@ -198,8 +198,11 @@ var OrbisFoxShellModel = (() => {
       message:this.message,canBack:this.canBack,canForward:this.canForward,requested:this.requested,editing:this.editing,security:this.security,issuer:this.issuer};}
   }
   class Controller {
-    constructor() {this.previous = 0; this.direction = 0; this.nextRepeat = 0;}
-    update(buttons, now) {
+    constructor() {this.previous = 0; this.direction = 0; this.nextRepeat = 0; this.nextDelete = 0; this.editing = false; this.blocked = 0;}
+    update(buttons, now, editing = false) {
+      // Never reuse a held opener, Enter or Close as an action in the next mode.
+      if(editing!==this.editing){this.editing=editing;this.blocked|=this.previous;this.direction=0;}
+      this.blocked &= buttons;buttons &= ~this.blocked;
       const pressed = buttons & ~this.previous; this.previous = buttons;
       const actions = [];
       const direction = buttons & (Buttons.left | Buttons.right | Buttons.up | Buttons.down);
@@ -216,6 +219,10 @@ var OrbisFoxShellModel = (() => {
           if (!(pressed & direction)) actions.push(name);
           this.nextRepeat = now + 100;
         }
+      }
+      if(editing && (buttons & Buttons.address)){
+        if(pressed & Buttons.address)this.nextDelete=now+400;
+        else if(now>=this.nextDelete){actions.push('address');this.nextDelete=now+100;}
       }
       this.direction = direction; return actions;
     }

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Compare SDK C++ and Rust ABI constants directly from the cross-linked ELF."""
-from pathlib import Path
+import argparse
 import struct
-import sys
+from pathlib import Path
 
 
-def verify(path):
+def verify(path, sdk_name='OpenOrbis'):
     data = Path(path).read_bytes()
     header = struct.unpack_from('<16sHHIQQQIHHHHHH', data)
     if header[0][:6] != b'\x7fELF\x02\x01' or header[2] != 62:
@@ -31,9 +31,13 @@ def verify(path):
     right = struct.unpack('<32Q', found['ORBISFOX_RUST_ABI'])
     for i, (a, b) in enumerate(zip(left, right), 1):
         if a != b:
-            raise ValueError(f'ABI field {i} mismatch: OpenOrbis={a}, Rust={b}')
-    print('Rust/OpenOrbis: all 32 audited ABI layouts/constants match in cross-linked ELF')
+            raise ValueError(f'ABI field {i} mismatch: {sdk_name}={a}, Rust={b}')
+    print(f'Rust/{sdk_name}: all 32 audited ABI layouts/constants match in cross-linked ELF')
 
 
 if __name__ == '__main__':
-    verify(sys.argv[1])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('elf', type=Path)
+    parser.add_argument('--sdk', choices=('openorbis', 'homebrew'), default='openorbis')
+    args = parser.parse_args()
+    verify(args.elf, sdk_name='native homebrew SDK' if args.sdk == 'homebrew' else 'OpenOrbis')

@@ -5,6 +5,35 @@
 #include <stdint.h>
 #include <string.h>
 #include <pthread.h>
+#ifdef ORBISFOX_HOMEBREW_SDK
+namespace orbisfox {
+// The new SDK imports the real POSIX clock API with native BSD types/IDs.
+// Keep guarded explicit diagnostic reads, but define no libc/pthread overrides.
+int firmware_clock_gettime(int nativeId, timespec* output) {
+    if (!output) { errno = EFAULT; return -1; }
+    struct {
+        unsigned char before[32];
+        timespec value;
+        unsigned char surplus[64], after[32];
+    } record;
+    memset(&record, 0xa5, sizeof(record));
+    const int result = ::clock_gettime(nativeId, &record.value);
+    const auto intact = [](const auto& bytes) {
+        for (auto byte : bytes) if (byte != 0xa5) return false;
+        return true;
+    };
+    if (!intact(record.before) || !intact(record.surplus) || !intact(record.after)) {
+        errno = EOVERFLOW; return -1;
+    }
+    if (result != 0) return result;
+    if (record.value.tv_nsec < 0 || record.value.tv_nsec >= 1000000000) {
+        errno = EPROTO; return -1;
+    }
+    *output = record.value;
+    return 0;
+}
+}
+#else
 #include <orbis/libkernel.h>
 namespace {
 using ReadClock = int (*)(int, struct timespec*);
@@ -123,4 +152,5 @@ extern "C" int pthread_condattr_getclock(const pthread_condattr_t* attr, clockid
     *output = sdkId;
     return 0;
 }
+#endif // ORBISFOX_HOMEBREW_SDK: the old SDK alone needs libc/pthread interposition.
 #endif // ORBISFOX_FULL_GECKO: no interposition in the preserved JS/SWGL lane.

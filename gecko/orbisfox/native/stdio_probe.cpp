@@ -14,17 +14,22 @@ struct Probe {
   FILE* file=nullptr;
   std::atomic<bool> start{false};
   std::atomic<bool> failed{false};
-  int nativeIDs[4]{};unsigned legacyIDs[4]{};
+  int nativeIDs[4]{};
+#ifndef ORBISFOX_HOMEBREW_SDK
+  unsigned legacyIDs[4]{};
+#endif
 };
 struct Worker {Probe* state;unsigned index;};
 void* writer(void* opaque) {
   auto& worker=*static_cast<Worker*>(opaque);auto& state=*worker.state;
   state.nativeIDs[worker.index]=scePthreadGetthreadid();
+#ifndef ORBISFOX_HOMEBREW_SDK
   // Observe only the exact location dereferenced by this SDK's __lockfile.
   // It is diagnostic, never used as native thread identity or for locking.
   uintptr_t sdkTCB=0;
   __asm__ volatile("movq %%fs:0, %0":"=r"(sdkTCB));
   if(sdkTCB) memcpy(&state.legacyIDs[worker.index],reinterpret_cast<void*>(sdkTCB+0x38),4);
+#endif
   while(!state.start.load()) sceKernelUsleep(100);
   for(unsigned line=0;line<1024;++line) {
     if(fprintf(state.file,"worker-%u:%04u OrbisFox stdio lock\n",worker.index,line)!=int(sizeof("worker-0:0000 OrbisFox stdio lock\n")-1))
@@ -47,15 +52,25 @@ bool probe_native_stdio_locks() {
     workers[count]={&state,count};
     if(pthread_create(&threads[count],nullptr,writer,&workers[count])!=0) break;
   }
+#ifndef ORBISFOX_HOMEBREW_SDK
   const uint64_t entryBefore=native_stdio_entry_lock_count();
+#endif
   state.start.store(true);
   bool okay=count==4;
   for(unsigned i=0;i<count;++i) {
-    const int result=pthread_join(threads[i],nullptr);okay=okay && result==0;
+    const int result=pthread_join(threads[i],nullptr);
+    if(result!=0) __builtin_trap(); // Unknown live writer: never close FILE or release its state.
+#ifdef ORBISFOX_HOMEBREW_SDK
+    log("Native SDK stdio identity: worker[%u] native=%d",i,state.nativeIDs[i]);
+#else
     log("Native stdio identity: worker[%u] native=%d sdk-FS0+0x38=%u",i,state.nativeIDs[i],state.legacyIDs[i]);
+#endif
   }
+#ifndef ORBISFOX_HOMEBREW_SDK
   const uint64_t entryDelta=native_stdio_entry_lock_count()-entryBefore;
-  okay=okay && entryDelta>=4096 && !state.failed.load() && fflush(state.file)==0 && fseek(state.file,0,SEEK_SET)==0;
+  okay=okay && entryDelta>=4096;
+#endif
+  okay=okay && !state.failed.load() && fflush(state.file)==0 && fseek(state.file,0,SEEK_SET)==0;
   bool seen[4][1024]{};unsigned lines=0;char buffer[128]{};
   while(fgets(buffer,sizeof(buffer),state.file)) {
     unsigned worker=0,line=0;int consumed=0;
@@ -65,7 +80,11 @@ bool probe_native_stdio_locks() {
   }
   okay=okay && lines==4096 && !ferror(state.file);
   if(fclose(state.file)!=0)okay=false;
+#ifdef ORBISFOX_HOMEBREW_SDK
+  log("Native SDK genuine stdio / 4-thread buffered-file contention: %s lines=%u",okay?"PASS":"FAIL",lines);
+#else
   log("Native genuine stdio entry ownership / 4-thread buffered-file contention: %s lines=%u protected-entries=%llu",okay?"PASS":"FAIL",lines,(unsigned long long)entryDelta);
+#endif
   return okay;
 }
 }

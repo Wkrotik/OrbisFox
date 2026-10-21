@@ -30,11 +30,12 @@ class MesaPackageTests(unittest.TestCase):
         script=r'''
 const assert=require('node:assert/strict'),vm=require('node:vm');
 const context={};vm.runInNewContext(HELPER,context);
-for(const value of ['/data/orbisfox/gecko-profile','/data/orbisfox/mesa-profile']) {
+for(const value of ['/data/orbisfox/gecko-profile','/data/orbisfox/mesa-profile','/data/orbisfox/homebrew-profile']) {
  const Cc={'@mozilla.org/process/environment;1':{getService(){return {get(name){assert.equal(name,'HOME');return value;}};}}};
  assert.equal(context.getTrustedProfilePath(Cc,{}),value);
 }
-for(const value of ['',undefined,'/tmp/profile','/data/orbisfox/mesa-profile/../gecko-profile']) {
+for(const value of ['',undefined,'/tmp/profile','/data/orbisfox/mesa-profile/../gecko-profile',
+ '/data/orbisfox/homebrew-profile/../gecko-profile','/data/orbisfox/homebrew-profile-unsafe']) {
  const Cc={'@mozilla.org/process/environment;1':{getService(){return {get(){return value;}};}}};
  assert.throws(()=>context.getTrustedProfilePath(Cc,{}));
 }
@@ -44,6 +45,22 @@ for(const value of ['',undefined,'/tmp/profile','/data/orbisfox/mesa-profile/../
         native=(ROOT/'gecko/orbisfox/native/main.cpp').read_text()
         self.assertIn('profilePath = "/data/orbisfox/mesa-profile"',native)
         self.assertIn('cachePath = "/data/orbisfox/mesa-cache"',native)
+
+    def test_native_sdk_profile_selection_never_uses_working_or_old_mesa_profile(self):
+        source=(ROOT/'gecko/orbisfox/native/main.cpp').read_text()
+        begin=source.index('#ifdef ORBISFOX_HOMEBREW_SDK\n  constexpr const char* profilePath')
+        selection=source[begin:source.index('\n  mkdir(cachePath',begin)]
+        for native in (False,True):
+            for mesa in (False,True):
+                flags=['-DORBISFOX_HOMEBREW_SDK'] if native else []
+                if mesa:flags.append('-DMOZ_ORBIS_MESA')
+                actual=subprocess.check_output(['clang++','-E','-P','-x','c++',*flags,'-'],input=selection,text=True)
+                profile='homebrew-profile' if native else 'mesa-profile' if mesa else 'gecko-profile'
+                cache='homebrew-cache' if native else 'mesa-cache' if mesa else 'cache'
+                self.assertIn('profilePath = "/data/orbisfox/'+profile+'"',actual)
+                self.assertIn('cachePath = "/data/orbisfox/'+cache+'"',actual)
+                self.assertEqual(actual.count('profilePath = '),1)
+                self.assertEqual(actual.count('cachePath = '),1)
 
     def test_exact_self_metadata_rejects_truncation_paid_and_bad_bounds(self):
         auth=PACKAGE['AUTHINFO'];raw=PACKAGE['auth_info_bytes'](auth);paid=0x3800000000000035

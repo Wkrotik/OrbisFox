@@ -180,6 +180,24 @@ NS_IMETHODIMP OrbisFoxHost::SendEscape() {
   return NS_OK;
 }
 
+NS_IMETHODIMP OrbisFoxHost::SendEnter() {
+  NS_ENSURE_TRUE(NS_IsMainThread(), NS_ERROR_NOT_SAME_THREAD);
+  nsCOMPtr<nsIWidget> widget=mWidget;
+  NS_ENSURE_TRUE(widget, NS_ERROR_NOT_INITIALIZED);
+  bool canceled=false;
+  for(auto message : {eKeyDown,eKeyPress,eKeyUp}) {
+    // A page canceling keydown must not receive a keypress/default form submit.
+    if(message==eKeyPress && canceled)continue;
+    WidgetKeyboardEvent event(true,message,widget);
+    event.mKeyCode=13; // DOM_VK_RETURN.
+    event.mKeyNameIndex=KEY_NAME_INDEX_Enter;
+    event.mCodeNameIndex=CODE_NAME_INDEX_Enter;
+    (void)widget->DispatchEvent(&event);
+    if(message==eKeyDown)canceled=event.mFlags.mDefaultPrevented;
+  }
+  return NS_OK;
+}
+
 NS_IMETHODIMP OrbisFoxHost::SetPointerInputEnabled(bool aEnabled) {
   NS_ENSURE_TRUE(NS_IsMainThread(), NS_ERROR_NOT_SAME_THREAD);
   const bool release = mPointerEnabled && !aEnabled && mMouseDown && mWidget;

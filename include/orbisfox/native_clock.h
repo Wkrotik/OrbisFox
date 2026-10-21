@@ -1,6 +1,32 @@
 #pragma once
 #include <time.h>
 namespace orbisfox {
+#ifdef ORBISFOX_HOMEBREW_SDK
+// Native BSD SDK headers already use firmware clock IDs. Never apply the
+// musl enum translation a second time (native process CPU is 15, not 2).
+constexpr int firmware_clock_id(int sdk) {
+    switch (sdk) {
+    case CLOCK_REALTIME:
+    case CLOCK_MONOTONIC:
+    case CLOCK_PROCESS_CPUTIME_ID:
+    case CLOCK_THREAD_CPUTIME_ID:
+#ifdef CLOCK_REALTIME_FAST
+    case CLOCK_REALTIME_FAST:
+#endif
+#ifdef CLOCK_MONOTONIC_FAST
+    case CLOCK_MONOTONIC_FAST:
+#endif
+        return sdk;
+    default: return -1;
+    }
+}
+constexpr int firmware_condition_clock_id(int sdk) {
+    return sdk == CLOCK_REALTIME || sdk == CLOCK_MONOTONIC ? sdk : -1;
+}
+constexpr int sdk_condition_clock_id(int native) {
+    return firmware_condition_clock_id(native);
+}
+#else
 // Full-Gecko-only SDK -> firmware boundary. Public FreeBSD 9 clock semantics:
 // https://github.com/freebsd/freebsd-src/blob/releng/9.0/sys/sys/time.h
 // https://github.com/freebsd/freebsd-src/blob/releng/9.0/sys/kern/kern_time.c
@@ -23,6 +49,7 @@ constexpr int firmware_condition_clock_id(int sdk) {
 constexpr int sdk_condition_clock_id(int native) {
     return native == 0 ? 0 : native == 4 ? 1 : -1;
 }
+#endif
 // Explicit untranslated diagnostic access, never an SDK clock API substitute.
 int firmware_clock_gettime(int nativeId, struct timespec* output);
 bool probe_gecko_clocks();

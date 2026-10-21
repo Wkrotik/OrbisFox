@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
+#ifndef ORBISFOX_HOMEBREW_SDK
 #include <orbis/libkernel.h>
 namespace {
 using PathStat = int (*)(const char*, orbisfox::FirmwareStat*);
@@ -92,18 +93,46 @@ extern "C" int fstat(int fd, struct stat* output) {
     GuardedStat native;
     return finish(nativeFstat(fd, &native.value), native, output);
 }
+#endif // Only the musl-facing SDK requires global stat interposition.
 namespace orbisfox {
+namespace {
+struct ProbeStatGuard {
+    unsigned char before[32];
+    struct stat value;
+    unsigned char surplus[128], after[32];
+    ProbeStatGuard() { memset(this, 0xa5, sizeof(*this)); value = {}; }
+    bool intact() const {
+        for (auto byte : before) if (byte != 0xa5) return false;
+        for (auto byte : surplus) if (byte != 0xa5) return false;
+        for (auto byte : after) if (byte != 0xa5) return false;
+        return true;
+    }
+};
+}
 bool probe_native_filesystem_metadata() {
+#ifdef ORBISFOX_HOMEBREW_SDK
+    static_assert(sizeof(struct stat) == sizeof(FirmwareStat));
+    static_assert(offsetof(struct stat, st_atim) == offsetof(FirmwareStat, accessed));
+    static_assert(offsetof(struct stat, st_size) == offsetof(FirmwareStat, bytes));
+    static_assert(offsetof(struct stat, st_birthtim) == offsetof(FirmwareStat, created));
+    log("Filesystem native SDK stat/lstat/fstat: direct imports; no musl record translation");
+#else
     log("Filesystem firmware binding: %s", bind() ? "PASS" : "FAIL");
-    struct stat path{}, link{}, descriptor{};
+#endif
+    ProbeStatGuard pathRecord, linkRecord, descriptorRecord, directoryRecord;
+    auto& path = pathRecord.value;
+    auto& link = linkRecord.value;
+    auto& descriptor = descriptorRecord.value;
+    auto& directory = directoryRecord.value;
     const char* font = "/app0/assets/fonts/NotoSans-Regular.ttf";
     const int a = stat(font, &path), b = lstat(font, &link);
     const int fd = open(font, O_RDONLY);
     const int c = fd >= 0 ? fstat(fd, &descriptor) : -1;
     if (fd >= 0) close(fd);
-    struct stat directory{};
     const int d = stat("/app0/gecko", &directory);
-    const bool ok = a == 0 && b == 0 && c == 0 && d == 0
+    const bool guards = pathRecord.intact() && linkRecord.intact()
+        && descriptorRecord.intact() && directoryRecord.intact();
+    const bool ok = guards && a == 0 && b == 0 && c == 0 && d == 0
         && path.st_size == 569208 && link.st_size == path.st_size
         && descriptor.st_size == path.st_size && descriptor.st_ino == path.st_ino
         && S_ISREG(path.st_mode) && S_ISREG(link.st_mode) && S_ISREG(descriptor.st_mode)

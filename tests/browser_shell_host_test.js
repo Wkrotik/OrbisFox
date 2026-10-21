@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 const source=fs.readFileSync('gecko/orbisfox/fixtures/browser-shell-host.js','utf8');
 function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeReady=true,tabsTest=false,textTest=false,stale=false,scroll=false,shellScroll=false,tabFault=false,reenterTabs=false,bookmarksTest=false,historyTest=false,mediaTest=false,saveFails=false,settingsTest=false,cursorFails=false,initialSettings='{}',initialSession='[]',featuresTest=false,clearData=null,ticks=7,tlsState=null,secureUI=undefined,blankTitle=false,delayWeb=-1,siteDataFlag=false,script=null,cursorX=40,cursorY=150,pixelRatio=1,rect={left:0,top:104,width:1280,height:584}}={}) {
   const calls=[],snapshots=[],elements=new Map();let tick,actions,exit=false,listenerCount=0,selected='content',editing=false;
-  const Ci={nsIDOMWindowUtils:{WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE:1,WHEEL_EVENT_ASYNC_ENABLED:8},nsITimer:{TYPE_REPEATING_SLACK:1},
+  const Ci={nsIEditor:{eNone:0,eStrip:0},nsIDOMWindowUtils:{WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE:1,WHEEL_EVENT_ASYNC_ENABLED:8},nsITimer:{TYPE_REPEATING_SLACK:1},
     nsIWebProgress:{NOTIFY_STATE_DOCUMENT:1,NOTIFY_LOCATION:2},nsIWebProgressListener:{STATE_IS_BROKEN:1,STATE_IS_SECURE:2,STATE_IS_DOCUMENT:4,STATE_START:8,STATE_STOP:16,LOCATION_CHANGE_SAME_DOCUMENT:32},nsIChannel:{},nsITransportSecurityInfo:{},
     nsIWebNavigation:{STOP_ALL:1,LOAD_FLAGS_NONE:0},nsIBrowserDOMWindow:{OPEN_CURRENTWINDOW:1,OPEN_NEWTAB:3,OPEN_PRINT_BROWSER:4,OPEN_NEWTAB_BACKGROUND:5,OPEN_NEWTAB_FOREGROUND:6,OPEN_NO_REFERRER:8}};
   const uri=spec=>({spec,scheme:spec.split(':')[0],host:/^https?:/.test(spec)?new URL(spec).hostname:'',userPass:/^https?:/.test(spec)?new URL(spec).username:''});
@@ -25,7 +25,7 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
     elements.set(id,e);return e;
   }
   element('content');
-  const ui={ready:true,bind(value){actions=value;calls.push(['bind']);},contentElement:()=>elements.get(selected),createContent(id,info){const e=element(id);e.openWindowInfo=info;if(tabFault)e.hasAttribute=name=>name==='remote';return e;},selectContent(id){selected=id;calls.push(['select',id]);},
+  const ui={ready:true,nativeChromeScene:()=> 'scene',bind(value){actions=value;calls.push(['bind']);},contentElement:()=>elements.get(selected),createContent(id,info){const e=element(id);e.openWindowInfo=info;if(tabFault)e.hasAttribute=name=>name==='remote';return e;},selectContent(id){selected=id;calls.push(['select',id]);},
     removeContent(id){elements.delete(id);calls.push(['remove',id]);},renderTabs(tabs,active){calls.push(['tabs',tabs.map(t=>t.id),active]);},isEditing:()=>editing,
     canScroll:()=>!editing&&!shellScroll,scrollShell(...args){calls.push(['shell-wheel',...args]);},pointerMoved(){},control(){},editText(value){editing=true;assert(actions.openTextKeyboard(value));calls.push(['edit-text',value]);},
     finishAddressKeyboard(status,text){editing=false;calls.push(['keyboard-finish',status,text]);if(textTest)calls.push(['commit-result',actions.commitText(text)]);},
@@ -34,7 +34,8 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
   const chrome={docShell:{domWindow:win},loadURI(){}};
   const host={cursorX,cursorY,buttons:0,nativeNetworkReady:nativeReady&&delayWeb<0,framesPresented:0,scrollX:scroll?4:0,scrollY:scroll?-7:0,keyboardStatus:1,keyboardText:'fox',keyboardConfirmButton:1,
     openAddressKeyboard(){return true;},openTextKeyboard(){calls.push(['open-text']);return true;},cancelAddressKeyboard(){calls.push(['cancel-keyboard']);},
-    createChromeBrowser:()=>chrome,pumpFrame:()=>!early,log:text=>calls.push(['log',text]),fixtureCheckpoint:value=>calls.push(['checkpoint',value]),setPointerInputEnabled(enabled){if(!enabled&&reenterTabs&&actions)assert.equal(actions.newTab(),false);},requestExit(){exit=true;},closeBrowser(){calls.push(['close']);}};
+    setNativeChromeState:scene=>calls.push(['native-scene',scene]),sendEnter:()=>calls.push(['enter-text']),
+    createChromeBrowser:()=>chrome,pumpFrame:()=>!early,log:text=>calls.push(['log',text]),fixtureCheckpoint:value=>calls.push(['checkpoint',value]),setPointerInputEnabled(enabled){calls.push(['pointer',enabled]);if(!enabled&&reenterTabs&&actions)assert.equal(actions.newTab(),false);},requestExit(){exit=true;},closeBrowser(){calls.push(['close']);}};
   host.setCursorSpeed=value=>{if(cursorFails&&value!==1)throw Error('cursor failed');calls.push(['cursor-speed',value]);};
   const timer={initWithCallback(fn){tick=fn;},cancel(){calls.push(['cancel-timer']);}};
   let bookmarkPrefs='[]',historyPrefs='[]',settingsPrefs=initialSettings,sessionPrefs=initialSession,contentColorScheme=2;const boolPrefs={};let prefSaves=0;
@@ -55,7 +56,7 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
   context.load=path=>vm.runInContext(fs.readFileSync('gecko/orbisfox/fixtures/'+path.split('/').at(-1),'utf8'),context);
   const tm={spinEventLoopUntil(name,done){
     for(let i=0;i<ticks&&!done();++i){if(i===delayWeb)host.nativeNetworkReady=true;tick();if(!actions)continue;
-      if(script){script(i,{actions,calls,elements,snapshots,win,uri,boolPrefs,get sessionPrefs(){return sessionPrefs;},get prefSaves(){return prefSaves;},get selected(){return selected;}});if(i===ticks-2)actions.exit();continue;}
+      if(script){script(i,{actions,calls,elements,snapshots,win,uri,boolPrefs,host,ui,get editing(){return editing;},set editing(value){editing=value;},get sessionPrefs(){return sessionPrefs;},get prefSaves(){return prefSaves;},get selected(){return selected;}});if(i===ticks-2)actions.exit();continue;}
       if(i===0){if(tabFault){assert.equal(actions.newTab(),false);assert.equal(elements.size,1);}
         assert.equal(actions.navigate('chrome://global/'),false);assert.equal(actions.navigate('https://arbitrary.example/path'),profileOkay&&nativeReady&&!failLoad);
         if(settingsTest){
@@ -252,5 +253,80 @@ for(let cycle=0;cycle<4;++cycle){
   run({script(i,t){const e=t.elements.get('content');if(i===0){const web={DOMWindow:e.contentWindow};e.nav.document={...e.nav.document,documentURI:'about:neterror?e=dnsNotFound&u=https%3A//x.invalid/'};e.nav.listener.onStateChange(web,null,20,0);}    if(i===1)assert.equal(t.snapshots.at(-1).state.error,'Server not found (dnsNotFound)');}});
   run({featuresTest:true,clearData:{failed:0},siteDataFlag:true});
 }
+// Exercise the chrome host against explicit page/editor doubles, not firmware.
+function liveText(check,{value='old',type='text',multiline=false,maxLength=-1,step=()=>{}}={}){
+  let field,doc,editorCalls=[],options=null;
+  const result=run({ticks:7,script(i,t){
+    if(i===0){
+      assert(t.actions.navigate('https://editing.example/'));const element=t.elements.get('content');doc=element.nav.document;
+      doc.defaultView=element.contentWindow;doc.defaultView.document=doc;doc.defaultView.top=element.contentWindow;
+      field={ownerDocument:doc,isConnected:true,localName:multiline?'textarea':'input',type,value,maxLength,selectionStart:value.length,selectionEnd:value.length,
+        focus(){doc.activeElement=this;this.afterFocus?.();},select(){this.selectionStart=0;this.selectionEnd=this.value.length;},setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;}};
+      if(type==='email')field.selectionStart=field.selectionEnd=null;
+      doc.activeElement=field;
+      const edit=(command,text)=>{
+        editorCalls.push({command,text,start:field.selectionStart,end:field.selectionEnd});
+        if(field.reject)throw Error('editor refused');
+        if(!field.cancelInput){const position=field.selectionStart+(command==='delete'?0:text.length);
+          field.value=field.value.slice(0,field.selectionStart)+(command==='delete'?'':text)+field.value.slice(field.selectionEnd);
+          field.selectionStart=field.selectionEnd=position;}
+        field.afterInput?.();
+      };
+      field.editor={document:doc,selectAll(){field.select();},insertText(text){edit('insertText',text);},
+        deleteSelection(direction,strip){assert.equal(direction,0);assert.equal(strip,0);edit('delete','');}};
+      t.ui.nativeChromeScene=()=>t.editing?'':'scene';
+      t.ui.editText=(value,received)=>{t.editing=true;options=received;t.actions.keyboardActive(true);};
+      t.host.buttons=1;
+    }
+    if(i===1)t.host.buttons=0;
+    if(i===2){check({field,doc,t,editorCalls,options});t.actions.cancelText();t.editing=false;t.actions.keyboardActive(false);}
+    step(i,t);
+  }});
+  assert(!result.calls.some(call=>call[0]==='open-text'),'custom path never launches IME');return result;
+}
+liveText(({field,t,editorCalls,options})=>{
+  assert(t.editing);assert.equal(options.start,3);assert.equal(options.maxLength,-1);
+  assert.equal(t.calls.filter(call=>call[0]==='native-scene').at(-1)[1],'');
+  field.focus=()=>assert.fail('no page focus/blur per key');
+  assert(t.actions.updateText('old!',4,4));assert.equal(field.value,'old!');assert.deepEqual(editorCalls.at(-1),{command:'insertText',text:'!',start:3,end:3});
+  assert(t.actions.updateText('old',3,3));assert.deepEqual(editorCalls.at(-1),{command:'delete',text:'',start:3,end:4});
+  assert(t.actions.updateText('oLd',2,2));assert.deepEqual(editorCalls.at(-1),{command:'insertText',text:'L',start:1,end:2});
+  assert(t.actions.updateText('',0,0));assert.equal(field.value,'');
+  t.actions.cancelText();assert.equal(t.actions.updateText('x',1,1),false);
+});
+for(const replacement of ['😁','\u{1FA00}'])liveText(({field,t,editorCalls})=>{
+  assert(t.actions.updateText(replacement,2,2));assert.equal(field.value,replacement);
+  assert.deepEqual(editorCalls.at(-1),{command:'insertText',text:replacement,start:0,end:2});
+},{value:'😀'});
+liveText(({field,t,options})=>{assert(options.multiline);assert(t.actions.updateText('old\n',4,4));assert.equal(field.value,'old\n');},{multiline:true});
+const privateEdit=liveText(({t,options})=>{assert(options.password);assert(t.actions.updateText('private-secret!',15,15));},{type:'password',value:'private-secret'});
+assert(!privateEdit.calls.some(call=>call[0]==='log'&&call[1].includes('private-secret')));
+liveText(({field,t,editorCalls})=>{assert(t.actions.updateText('a@b.c',5,5));assert.equal(field.value,'a@b.c');assert.equal(editorCalls.at(-1).text,'a@b.c');},{type:'email'});
+liveText(({t,editorCalls})=>{assert.equal(t.actions.updateText('older',5,5),false);assert.equal(editorCalls.length,0);},{maxLength:3});
+liveText(({field,t})=>{assert(t.actions.updateText('ol',2,2));assert.equal(field.value,'ol');},{maxLength:1});
+liveText(({field,t})=>{field.cancelInput=true;assert.equal(t.actions.updateText('old!',4,4).value,'old');});
+for(const invalidate of [
+  field=>{field.value='script changed';},field=>{field.isConnected=false;},field=>{field.disabled=true;},field=>{field.readOnly=true;},
+  (field,doc)=>{doc.nodePrincipal.isSystemPrincipal=true;},(field,doc,t)=>{t.elements.get('content').nav.document={};},
+  (field,doc)=>{doc.defaultView.document={};},(field,doc)=>{doc.defaultView.top={};},(field,doc)=>{doc.activeElement={};},
+  field=>{field.editor=null;},field=>{field.editor.document={};}
+])liveText(({field,doc,t,editorCalls})=>{invalidate(field,doc,t);assert.equal(t.actions.updateText('new',3,3),false);assert.equal(editorCalls.length,0);});
+for(const args of [[512,0,0],['x',-1,0],['x',0,2],['x',1,0],['x',0.5,1],['x'.repeat(513),0,0]])
+  liveText(({t,editorCalls})=>{assert.equal(t.actions.updateText(...args),false);assert.equal(editorCalls.length,0);});
+liveText(({field,t})=>{field.reject=true;assert.equal(t.actions.updateText('new',3,3),false);});
+liveText(({field,doc,t})=>{field.afterInput=()=>{doc.defaultView.document={};};assert.equal(t.actions.updateText('new',3,3),false);});
+liveText(({t})=>{assert(t.actions.enterText());assert.equal(t.calls.filter(call=>call[0]==='enter-text').length,1);assert.equal(t.actions.enterText(),false,'no retained page target after Enter');});
+for(const invalidate of [field=>{field.value='changed';},field=>{field.isConnected=false;},(field,doc)=>{doc.defaultView.document={};},
+  (field,doc,t)=>{t.elements.get('content').nav.document={};},(field,doc)=>{field.afterFocus=()=>{doc.activeElement={};};},
+  (field,doc)=>{field.afterFocus=()=>{doc.nodePrincipal.isSystemPrincipal=true;};},
+  (field,doc)=>{field.afterFocus=()=>{doc.defaultView.document={};};},(field,doc)=>{doc.activeElement={};}])liveText(({field,doc,t})=>{
+    invalidate(field,doc,t);assert.equal(t.actions.enterText(),false);assert(!t.calls.some(call=>call[0]==='enter-text'));
+  });
+liveText(()=>{},{step(i,t){
+  if(i===2){let pending=true;t.host.takeNativeChromeAction=()=>{if(!pending)return '';pending=false;return '2:';};t.ui.nativeCommand=()=>assert.fail('queued Forward quarantined');t.host.buttons=2048;t.actions.pointer(true);assert.equal(t.calls.filter(call=>call[0]==='pointer').at(-1)[1],false);}
+  if(i===3){assert.equal(t.calls.filter(call=>call[0]==='pointer').at(-1)[1],false);assert.equal(t.calls.filter(call=>call[0]==='native-scene').at(-1)[1],'');t.host.buttons=0;}
+  if(i===4){assert.equal(t.editing,false);assert.equal(t.calls.filter(call=>call[0]==='pointer').at(-1)[1],true);assert.equal(t.calls.filter(call=>call[0]==='native-scene').at(-1)[1],'scene');}
+}});
+console.log('Custom keyboard host: live editor boundaries, stale/focus/rejection/password/limits and R2 Enter/release gates; doubles only');
 setImmediate(()=>{assert.equal(clearResults.filter(ok=>ok===false).length,32,'failed flags are reported as failure');assert.equal(clearResults.filter(ok=>ok===true).length,36);
   console.log('Browser features: session save/bounds/rollback/shutdown/clear, gated/capped/non-destructive restore, lock evidence, title fallback, zoom defaults, reopen at cap, GPC root prefs, async clear-data');});

@@ -35,16 +35,24 @@ function run(failure = '', profile = '/data/orbisfox/gecko-profile') {
   return {result, error, trace, logs, opens, closes, reads, finalizes};
 }
 for (let cycle = 0; cycle < 32; ++cycle) {
-  assert(run('', '/data/orbisfox/mesa-profile').result);
-  assert(run('', '/data/elsewhere').error);
-  const good = run(); assert(good.result); assert(!good.error);
-  assert.equal(good.opens, 2); assert.equal(good.closes, 2); assert.equal(good.reads, 3); assert.equal(good.finalizes, 3);
-  assert.deepEqual(good.trace.map(s => s.split(' ')[0]), ['CREATE', 'BEGIN', 'INSERT', 'COMMIT', 'BEGIN', 'UPDATE', 'ROLLBACK']);
-  assert(good.logs.some(s => s.endsWith('rollback PASS')));
-  for (const failure of ['service', 'open', 'sql', 'missing', 'reopen']) {
-    const bad = run(failure); assert(!bad.result); assert(bad.error);
-    assert(!bad.logs.some(s => s.endsWith('rollback PASS')));
-    if (['sql', 'missing', 'reopen'].includes(failure)) assert(bad.closes > 0);
+  for (const profile of ['/data/orbisfox/gecko-profile', '/data/orbisfox/mesa-profile',
+                         '/data/orbisfox/homebrew-profile']) {
+    const good = run('', profile); assert(good.result, String(good.error)); assert(!good.error);
+    assert.equal(good.opens, 2); assert.equal(good.closes, 2); assert.equal(good.reads, 3); assert.equal(good.finalizes, 3);
+    assert.deepEqual(good.trace.map(s => s.split(' ')[0]), ['CREATE', 'BEGIN', 'INSERT', 'COMMIT', 'BEGIN', 'UPDATE', 'ROLLBACK']);
+    assert(good.logs.some(s => s.endsWith('rollback PASS')));
+    for (const failure of ['service', 'open', 'sql', 'missing', 'reopen']) {
+      const bad = run(failure, profile); assert(!bad.result); assert(bad.error);
+      assert(!bad.logs.some(s => s.endsWith('rollback PASS')));
+      if (['sql', 'missing', 'reopen'].includes(failure)) assert(bad.closes > 0);
+    }
+  }
+  for (const profile of ['/data/elsewhere', '/data/orbisfox/homebrew-profile-unsafe',
+                         '/data/orbisfox/homebrew-profile/../gecko-profile',
+                         '/data/orbisfox/homebrew-profile/']) {
+    const bad = run('', profile); assert(!bad.result);
+    assert.match(String(bad.error), /Invalid trusted storage probe profile/);
+    assert.equal(bad.opens, 0); assert.equal(bad.trace.length, 0);
   }
 }
 console.log('Actual mozStorage probe helper: service/open/SQL/row errors, commit/reopen/UTF-8/rollback sequence, statement finalization/connection close, 32 cycles PASS (XPCOM doubles)');

@@ -28,6 +28,51 @@ def freetype_guards(text):
                   text, flags=re.MULTILINE)
 
 
+def patch_native_ipc_primitives(root):
+    replace_once(root, 'ipc/chromium/src/chrome/common/process_watcher_posix_sigchld.cc',
+                 '#if !defined(XP_DARWIN)\n'
+                 '// Linux, {Free,Net,Open}BSD, and Solaris; but not macOS, yet.\n'
+                 '#  define HAVE_PIPE2 1',
+                 '#if !defined(XP_DARWIN) && !defined(ORBISFOX_HOMEBREW_SDK)\n'
+                 '// Native BSD 9 uses the checked pipe/fcntl fallback below.\n'
+                 '// Linux, {Free,Net,Open}BSD, and Solaris; but not macOS, yet.\n'
+                 '#  define HAVE_PIPE2 1')
+    replace_once(root, 'ipc/glue/ProcessUtils_bsd.cpp',
+                 ('#if !defined(XP_NETBSD) && !defined(__ORBIS__)\n#  include <pthread_np.h>',
+                  '#if !defined(XP_NETBSD)\n#  include <pthread_np.h>'),
+                 '#if !defined(XP_NETBSD) && (!defined(__ORBIS__) || defined(ORBISFOX_HOMEBREW_SDK))\n'
+                 '#  include <pthread_np.h>')
+
+
+def patch_native_libevent_rng_names(root):
+    # Keep the existing embedded entropy/error path. Native BSD headers also
+    # declare arc4random APIs, so the embedded static helpers need private names.
+    name = 'ipc/chromium/src/third_party/libevent/evutil_rand.c'
+    anchor = '#else /* !EVENT__HAVE_ARC4RANDOM { */\n\n'
+    replace_once(root, name, anchor,
+                 anchor + '#ifdef ORBISFOX_HOMEBREW_SDK\n'
+                 '#include <stdlib.h>\n'
+                 '#define arc4random_addrandom orbis_libevent_arc4random_addrandom\n'
+                 '#define arc4random_buf orbis_libevent_arc4random_buf\n'
+                 '#endif\n\n')
+    tail = ('void\nevutil_free_secure_rng_globals_(void)\n{\n'
+            '    evutil_free_secure_rng_globals_locks();\n}\n')
+    replace_once(root, name, tail,
+                 tail + '\n#if defined(ORBISFOX_HOMEBREW_SDK) && !defined(EVENT__HAVE_ARC4RANDOM)\n'
+                 '/* Do not leak names into the following unified-build units. */\n'
+                 '#undef arc4random_addrandom\n#undef arc4random_buf\n#endif\n')
+
+
+def patch_orbis_webrender_freetype(root):
+    # This module consumes cairo-ft.h on Orbis too. Declare its FreeType
+    # dependency locally instead of depending on SDK-global font includes.
+    replace_once(root, 'gfx/webrender_bindings/moz.build',
+                 'if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("android", "gtk"):\n'
+                 '    CXXFLAGS += CONFIG["CAIRO_FT_CFLAGS"]',
+                 'if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("android", "gtk", "orbis"):\n'
+                 '    CXXFLAGS += CONFIG["CAIRO_FT_CFLAGS"]')
+
+
 def static_ffvpx_bindings(root):
     """Resolve real pinned codec functions, without invented PRLibrary handles."""
     base=root/'dom/media/platforms/ffmpeg'
@@ -420,10 +465,19 @@ def main():
                             '    USE_LIBS += ["mozavcodec", "mozavutil"]\n'
                             '    OS_LIBS += ' + repr(previous_libraries) + '\n\nEXPORTS += [\n')
     legacy_codec_build = 'if CONFIG["MOZ_WIDGET_TOOLKIT"] == "orbis":\n    USE_LIBS += ["mozavcodec", "mozavutil"]\n\nEXPORTS += [\n'
-    replace_once(root, 'dom/media/platforms/ffmpeg/moz.build', (previous_codec_build, legacy_codec_build, 'EXPORTS += [\n'),
+    old_codec_build = ('if CONFIG["MOZ_WIDGET_TOOLKIT"] == "orbis":\n'
+                       '    USE_LIBS += ["mozavcodec", "mozavutil"]\n'
+                       '    OS_LIBS += ' + repr(codec_libraries) + '\n\nEXPORTS += [\n')
+    native_libraries = [entry.replace('/media-codecs/native/', '/media-codecs/native-homebrew/')
+                        for entry in codec_libraries]
+    replace_once(root, 'dom/media/platforms/ffmpeg/moz.build',
+                 (old_codec_build, previous_codec_build, legacy_codec_build, 'EXPORTS += [\n'),
                  'if CONFIG["MOZ_WIDGET_TOOLKIT"] == "orbis":\n'
                  '    USE_LIBS += ["mozavcodec", "mozavutil"]\n'
-                 '    OS_LIBS += ' + repr(codec_libraries) + '\n\nEXPORTS += [\n')
+                 '    if CONFIG["MOZ_ORBIS_HOMEBREW_SDK"]:\n'
+                 '        OS_LIBS += ' + repr(native_libraries) + '\n'
+                 '    else:\n'
+                 '        OS_LIBS += ' + repr(codec_libraries) + '\n\nEXPORTS += [\n')
     register_cubeb_source(root)
     replace_once(root, 'media/libcubeb/src/moz.build', "Library('cubeb')\n",
                  "Library('cubeb')\n\n"
@@ -739,6 +793,8 @@ def main():
     replace_once(root, 'gfx/cairo/cairo/src/moz.build',
                  "if CONFIG['MOZ_WIDGET_TOOLKIT'] not in ('cocoa', 'uikit'):",
                  "if CONFIG['MOZ_WIDGET_TOOLKIT'] not in ('cocoa', 'uikit', 'orbis'):")
+    patch_orbis_webrender_freetype(root)
+    patch_native_libevent_rng_names(root)
     for name in ('gfx/2d/2D.h', 'gfx/2d/Factory.cpp',
                  'gfx/2d/UnscaledFontFreeType.h', 'gfx/2d/UnscaledFontFreeType.cpp',
                  'gfx/2d/NativeFontResourceFreeType.h', 'gfx/2d/NativeFontResourceFreeType.cpp'):
@@ -1183,8 +1239,30 @@ def main():
                  '#if defined(LINUX) || defined(SOLARIS)\n',
                  '#if defined(LINUX) || defined(SOLARIS) || defined(__ORBIS__)\n')
     replace_once(root, 'nsprpub/pr/src/pthreads/ptthread.c',
-                 '#if defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY)\n#include <pthread_np.h>',
-                 '#if !defined(__ORBIS__) && (defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY))\n#include <pthread_np.h>')
+                 ('#if defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY)\n#include <pthread_np.h>',
+                  '#if !defined(__ORBIS__) && (defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY))\n#include <pthread_np.h>'),
+                 '#if (!defined(__ORBIS__) || defined(ORBISFOX_HOMEBREW_SDK)) && (defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY))\n#include <pthread_np.h>')
+    # The native BSD netdb.h declares the five-argument public _r APIs. NSPR's
+    # existing locked, one-argument fallback must have private names instead;
+    # do not claim the system exports the public reentrant implementations.
+    replace_once(root, 'nsprpub/pr/src/misc/prnetdb.c',
+                 '#if defined(ANDROID)\n/* Android\'s Bionic libc system includes prototypes',
+                 '#if defined(ANDROID) || defined(ORBISFOX_HOMEBREW_SDK)\n'
+                 '/* The native SDK also declares public _r names: keep this locked fallback private. */\n'
+                 '/* Android\'s Bionic libc system includes prototypes')
+    replace_once(root, 'nsprpub/pr/src/misc/prnetdb.c', '#include <string.h>\n',
+                 '#include <string.h>\n#ifdef ORBISFOX_HOMEBREW_SDK\n'
+                 '#include "../../../../orbisfox/OrbisNsprNetdb.h"\n#endif\n')
+    replace_once(root, 'nsprpub/pr/src/misc/prnetdb.c',
+                 '#define GETHOSTBYNAME2(name, af) gethostbyname2(name, af)',
+                 '#ifdef ORBISFOX_HOMEBREW_SDK\n'
+                 '#define GETHOSTBYNAME2(name, af) OrbisNsprGetHostByName2(name, af)\n'
+                 '#else\n#define GETHOSTBYNAME2(name, af) gethostbyname2(name, af)\n#endif')
+    replace_once(root, 'nsprpub/pr/src/misc/prnetdb.c',
+                 '    return getprotobynumber(number);',
+                 '#ifdef ORBISFOX_HOMEBREW_SDK\n'
+                 '    return OrbisNsprGetProtoByNumber(number);\n'
+                 '#else\n    return getprotobynumber(number);\n#endif')
     # Use upstream's no-native-sampling fallback. Orbis ucontext/register and
     # cross-thread suspension ABIs have not been validated for the profiler.
     for arch in ('__x86_64__', '__aarch64__'):
@@ -1223,8 +1301,7 @@ def main():
     replace_once(root, 'ipc/glue/SetProcessTitle.cpp',
                  '#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \\\n    defined(__DragonFly__)',
                  '#elif !defined(__ORBIS__) && (defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \\\n    defined(__DragonFly__))')
-    replace_once(root, 'ipc/glue/ProcessUtils_bsd.cpp',
-                 '#if !defined(XP_NETBSD)', '#if !defined(XP_NETBSD) && !defined(__ORBIS__)')
+    patch_native_ipc_primitives(root)
     replace_once(root, 'ipc/glue/SharedMemoryPlatform_posix.cpp',
                  '#include "SharedMemoryPlatform.h"\n',
                  '#include "SharedMemoryPlatform.h"\n\n#ifdef __ORBIS__\n'

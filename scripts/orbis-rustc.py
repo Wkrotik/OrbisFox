@@ -5,6 +5,11 @@ from pathlib import Path
 import sys
 import subprocess
 ROOT = Path(__file__).resolve().parent.parent
+sdk = os.environ.get('ORBISFOX_SDK', 'openorbis')
+if sdk == 'homebrew':
+    os.execv(sys.executable, [sys.executable, str(ROOT / 'scripts/homebrew-rustc.py'), *sys.argv[1:]])
+if sdk != 'openorbis':
+    sys.exit('Unknown ORBISFOX_SDK: ' + sdk)
 args = sys.argv[1:]
 if args in (['--print', 'target-list'], ['--print=target-list']):
     result = subprocess.run(['rustc', *args], check=True)
