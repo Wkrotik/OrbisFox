@@ -12,6 +12,8 @@ namespace mozilla::widget {
 namespace {
 std::atomic<uint64_t> activeStart{0},events{0},longEvents{0},lastMicros{0},maxMicros{0};
 std::atomic<unsigned> activeDepth{0};
+std::atomic<unsigned> pumpPhase{0};std::atomic<uint64_t> pumpStart{0};
+std::atomic<uint64_t> pumpLast[unsigned(OrbisPumpPhase::Count)]{},pumpMax[unsigned(OrbisPumpPhase::Count)]{};
 uint64_t stack[64]{};unsigned depth=0;char lastName[80]{},lastDetailedName[80]{};uint64_t lastDetailedMicros=0;
 OrbisCompletedTask completed[16]{};uint64_t completedSerial=0;
 pthread_mutex_t nameMutex=PTHREAD_MUTEX_INITIALIZER;
@@ -40,6 +42,29 @@ OrbisMainTaskSpan::~OrbisMainTaskSpan(){
  const uint64_t serial=++completedSerial;auto& record=completed[(serial-1)%16];
  record.serial=serial;record.ended=now;record.micros=elapsed;record.depth=depth+1;record.detailed=detailed_;
  memcpy(record.name,lastName,sizeof(lastName));
+}
+OrbisPumpSpan::OrbisPumpSpan(bool enabled):tracked_(enabled&&NS_IsMainThread()){
+ if(!tracked_)return;
+ previousPhase_=pumpPhase.load();previousStart_=pumpStart.load();SetPhase(OrbisPumpPhase::Poll);
+}
+void OrbisPumpSpan::SetPhase(OrbisPumpPhase phase){
+ if(!tracked_)return;
+ const auto next=unsigned(phase);if(next>=unsigned(OrbisPumpPhase::Count))__builtin_trap();
+ const uint64_t now=sceKernelGetProcessTime();
+ if(phase_){const uint64_t elapsed=now>=start_?now-start_:0;
+  pumpLast[phase_].store(elapsed);if(elapsed>pumpMax[phase_].load())pumpMax[phase_].store(elapsed);}
+ phase_=next;start_=now;pumpStart.store(next?now:0);pumpPhase.store(next);
+}
+OrbisPumpSpan::~OrbisPumpSpan(){
+ if(!tracked_)return;
+ SetPhase(OrbisPumpPhase::Idle);
+ // A page handler may spin a nested loop; restore the enclosing phase sample.
+ pumpStart.store(previousStart_);pumpPhase.store(previousPhase_);
+}
+OrbisPumpDiagnostics GetOrbisPumpDiagnostics(){
+ OrbisPumpDiagnostics result;result.phase=pumpPhase.load();result.activeStart=pumpStart.load();
+ for(unsigned i=1;i<unsigned(OrbisPumpPhase::Count);++i){result.lastMicros[i]=pumpLast[i].load();result.maxMicros[i]=pumpMax[i].load();}
+ return result;
 }
 OrbisTaskDiagnostics GetOrbisTaskDiagnostics(){
  OrbisTaskDiagnostics result;

@@ -62,9 +62,12 @@ struct Callbacks {
  void (*log)(void*,const char*)=logMessage;
  bool (*present)(void*,const uint8_t*,int,int,int)=[](void*,const uint8_t*,int,int,int){++presents;return presentOkay;};
 } sCallbacks;
+enum class OrbisPumpPhase {Mailbox,Map,Present};
+struct PumpDiagnostics {void SetPhase(OrbisPumpPhase){}};
 struct Host {
  uint64_t mLastSequence=0,mFramesPresented=0;unsigned mKeyboardStatus=0;
  int pump(){
+  PumpDiagnostics pumpDiagnostics;
   const auto traceStage=[](const char*){};
 #include "frame.inc"
   return NS_OK;

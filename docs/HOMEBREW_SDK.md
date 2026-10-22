@@ -276,6 +276,76 @@ established yet. The prior package, ELF and reports are retained together under
 `native-rollback-path.txt` records the exact private local retention path. uBO
 and collector-policy changes are intentionally excluded from this comparison.
 
+### Pump follow-up after the portable-interpreter console trial
+
+Checkpoint `2fe3171` retains the portable candidate and host proof. The operator
+reported no perceptible improvement. Logs confirmed actual portable-core entry,
+but still recorded a 9.57 s view-transition task, 7.03 s timer task, 3.16 s
+collector task and a 7.67 s pump phase. Different workloads and overlapping
+inclusive tasks do not establish a controlled old/new speed comparison.
+
+During the long pump the native stage remained after poll and before present.
+This does not implicate native frame copy or VideoOut: synchronous page input,
+mailbox acquisition and Skia mapping all occur in that interval. Do not replace
+surface ownership or move DOM work off-main on the assumption of a lock fault.
+
+The next candidate bounds input replay between complete edges to a 4 ms soft
+budget, retaining the existing 16-edge cap. Undrained edges stay queued for the
+next ordinary pump call; latest polled button/position state must not overtake
+them. A single synchronous page handler can exceed the entire budget; there is
+no preemption, nested event pumping or hard frame-time guarantee. Native chrome
+commands are limited to one per shell tick, preserving FIFO order and allowing
+rendering between expensive tab teardowns instead of batching up to 16.
+
+Existing opt-in heartbeat output adds `pump-phases`: phase 0 means idle; phases
+1–5 and the last/max duration arrays mean poll, input, mailbox, map and present.
+These are approximate independent atomic samples, with inclusive durations when
+a page handler spins a nested loop. The enclosing phase is restored afterwards,
+and error returns clear the active phase. Maxima cover observed work during this
+process, not just a new capture. Diagnostics disabled means no phase clock reads
+or updates. No page text, coordinates or URLs are added to this output.
+
+Host sanitizer tests exercise primary/middle edge deferral, prevention of a
+latest-state release/press overtaking queued edges, the 16-edge boundary,
+reentrant pointer ownership, phase nesting/error cleanup and disabled/worker
+observation. Shell doubles verify one-command-per-tick FIFO and interleaved
+rendering. They do not establish console timing or a fix for the observed wait.
+Collector budgets, memory-pressure handling and uBO are deliberately unchanged
+until this pump experiment is evaluated; incremental collection is already on.
+
+### Tab/worker teardown follow-up
+
+The first pump trial showed sub-millisecond mailbox/map maxima, but a 5.22 s
+close action and a 9.87 s worker-finish runnable. These inclusive measurements
+justify testing teardown; they do not identify the cause of `CE-34878-0` or prove
+that worker shutdown consumed all of either interval.
+
+For `MOZ_ORBIS_HOMEBREW_SDK` only, the producer changes the finished-worker
+runnable in `dom/workers/RuntimeService.cpp` from `nsThread::Shutdown()` to a
+checked `BeginShutdown()` handshake. The synchronous wrapper spins a nested main
+loop while waiting. BeginShutdown retains the ordinary thread/context ownership,
+ACK and final join; `WaitForAllAsynchronousShutdowns()` remains the application
+exit barrier. It does not detach a pthread, abandon a join, move DOM work to a
+worker, or change worker cancellation. The ACK/join and other teardown stages
+can still take time; there is no hard latency guarantee. Legacy SDK behavior is
+unchanged.
+
+Tab destruction still removes listeners, stops loads and detaches the frame on
+main. Existing opt-in diagnostics emit only slow (>=250 ms) `Browser tab cleanup`
+phase/duration records for replacement-tab selection, listener removal, load
+stop and frame detach. Failed timing/logging must not suppress cleanup or mask
+its original errors. No URLs, page text or extra strong document references are
+introduced. Tests cover producer byte/mtime idempotence and drift rejection,
+actual patched-body native/legacy API choice with explicit ACK ownership doubles,
+error checks, and close timing opt-in/failure isolation. These are not console
+proof; collector policy, JIT denial and the three-content-context limit remain
+unchanged.
+
+The native validation-only `libxul.so` now discards DWARF at link time rather
+than first writing a multi-gigabyte temporary and stripping it afterwards. Its
+symbols, link checks and original object/debug inputs remain; this is a host
+build-space fix, not a browser optimization or permission to discard evidence.
+
 ### Console exit finding
 
 The first native probe completed all 52 checks, closed its result file and printed

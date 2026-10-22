@@ -20,7 +20,7 @@ function run({principal=true,failLoad=false,early=false,profileOkay=true,nativeR
         if(!target.spec.includes('slow'))this.listener.onStateChange({DOMWindow:win},request,20,0);},
       stop(){calls.push(['stop',id]);},reload(){calls.push(['reload',id]);},goBack(){calls.push(['back',id]);},goForward(){calls.push(['forward',id]);}};
     const progress={addProgressListener(l){nav.listener=l;++listenerCount;},removeProgressListener(){--listenerCount;calls.push(['remove-listener',id]);}};
-    const e={id,nav,contentWindow:win,docShell:{QueryInterface:iface=>iface===Ci.nsIWebProgress?progress:nav},frameLoader:{browsingContext:{isContent:true,useRemoteTabs:false,useRemoteSubframes:false,get secureBrowserUI(){if(secureUI==='throw')throw Error('no secure UI');return secureUI===undefined?undefined:{state:secureUI};}}},
+    const e={id,nav,progress,contentWindow:win,docShell:{QueryInterface:iface=>iface===Ci.nsIWebProgress?progress:nav},frameLoader:{browsingContext:{isContent:true,useRemoteTabs:false,useRemoteSubframes:false,get secureBrowserUI(){if(secureUI==='throw')throw Error('no secure UI');return secureUI===undefined?undefined:{state:secureUI};}}},
       getAttribute:name=>name==='type'?'content':null,hasAttribute:()=>false,getBoundingClientRect:()=>rect};
     elements.set(id,e);return e;
   }
@@ -351,6 +351,35 @@ liveText(()=>{},{step(i,t){
   if(i===3){assert.equal(t.calls.filter(call=>call[0]==='pointer').at(-1)[1],false);assert.equal(t.calls.filter(call=>call[0]==='native-scene').at(-1)[1],'');t.host.buttons=0;}
   if(i===4){assert.equal(t.editing,false);assert.equal(t.calls.filter(call=>call[0]==='pointer').at(-1)[1],true);assert.equal(t.calls.filter(call=>call[0]==='native-scene').at(-1)[1],'scene');}
 }});
-console.log('Custom keyboard host: live editor boundaries, stale/focus/rejection/password/limits and R2 Enter/release gates; doubles only');
+{
+  const pending=['first','second','third'],handled=[];
+  run({ticks:6,script(i,t){
+    if(i===0){t.host.takeNativeChromeAction=()=>pending.shift()||'';t.ui.nativeCommand=command=>{handled.push(command);return true;};}
+    else if(i<=3){assert.equal(handled.length,i,'one queued action per tick');assert.equal(pending.length,3-i);assert.equal(t.snapshots.length,i+1,'rendering proceeds between commands');}
+    if(i===4)assert.deepEqual(handled,['first','second','third']);
+  }});
+}
+for(const mode of ['enabled','disabled','clock-fails','log-fails'])run({timings:{enabled:mode!=='disabled'},script(i,t){
+  if(i!==0)return;
+  assert(t.actions.newTab());const id=t.selected,element=t.elements.get(id),begin=t.calls.length;
+  let clock=1000;const oldClock=t.win.performance.now,oldLog=t.host.log;
+  t.win.performance.now=()=>{assert.notEqual(mode,'disabled','disabled diagnostics never read the close clock');if(mode==='clock-fails')throw Error('clock failed');return clock;};
+  t.host.log=text=>{if(mode==='log-fails'&&text.startsWith('Browser tab cleanup: '))throw Error('log failed');oldLog(text);};
+  const select=t.ui.selectContent,remove=t.ui.removeContent,listener=element.progress.removeProgressListener,stop=element.nav.stop;
+  t.ui.selectContent=id=>{clock+=270;select(id);};
+  element.progress.removeProgressListener=value=>{clock+=280;listener(value);};
+  element.nav.stop=value=>{clock+=290;stop(value);throw Error('stop rejected');};
+  t.ui.removeContent=id=>{clock+=300;remove(id);};
+  assert(t.actions.closeTab(id),'cleanup still succeeds when timing fails or stop rejects');
+  assert(!t.elements.has(id));assert.equal(t.selected,'content');
+  const recent=t.calls.slice(begin),steps=recent.filter(call=>['select','remove-listener','stop','remove'].includes(call[0]));
+  assert.deepEqual(steps.map(call=>call[0]),['select','remove-listener','stop','remove']);
+  assert(recent.some(call=>call[0]==='log'&&call[1].includes('ERROR: tab stop: Error: stop rejected')),'original cleanup error retained');
+  const phases=recent.filter(call=>call[0]==='log'&&call[1].startsWith('Browser tab cleanup: ')).map(call=>JSON.parse(call[1].slice('Browser tab cleanup: '.length)));
+  if(mode==='enabled')assert.deepEqual(phases,[{phase:'select-replacement',ms:270},{phase:'remove-listener',ms:280},{phase:'stop-load',ms:290},{phase:'detach-frame',ms:300}]);
+  else assert.equal(phases.length,0);
+  t.ui.selectContent=select;t.ui.removeContent=remove;t.win.performance.now=oldClock;t.host.log=oldLog;
+}});
+console.log('Custom keyboard host: live editor boundaries, stale/focus/rejection/password/limits and R2 Enter/release gates; close-phase opt-in/failure isolation; doubles only');
 setImmediate(()=>{assert.equal(clearResults.filter(ok=>ok===false).length,32,'failed flags are reported as failure');assert.equal(clearResults.filter(ok=>ok===true).length,36);
   console.log('Browser features: session save/bounds/rollback/shutdown/clear, gated/capped/non-destructive restore, lock evidence, title fallback, zoom defaults, reopen at cap, GPC root prefs, async clear-data');});

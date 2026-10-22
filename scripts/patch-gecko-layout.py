@@ -44,6 +44,34 @@ def patch_portable_baseline_marker(root):
                  '#endif\n')
 
 
+def patch_native_link_gate_debug(root):
+    # The build already strips this validation DSO; avoid its multi-GB temporary.
+    replace_once(root, 'toolkit/library/build/moz.build', 'Libxul("xul-real")\n',
+                 'Libxul("xul-real")\n\n'
+                 'if CONFIG["MOZ_ORBIS_HOMEBREW_SDK"]:\n'
+                 '    LDFLAGS += ["-Wl,--strip-debug"]\n')
+
+
+def patch_native_worker_shutdown(root):
+    name = 'dom/workers/RuntimeService.cpp'
+    replace_once(root, name, '#include "nsISupportsPriority.h"',
+                 '#include "nsISupportsPriority.h"\n'
+                 '#ifdef MOZ_ORBIS_HOMEBREW_SDK\n#include "nsIThreadShutdown.h"\n#endif')
+    old = ('  if (thread->ShutdownRequired()) {\n'
+           '    MOZ_ALWAYS_SUCCEEDS(thread->Shutdown());\n'
+           '  }\n\n  return NS_OK;\n}\n\n}  // namespace workerinternals')
+    new = ('  if (thread->ShutdownRequired()) {\n'
+           '#ifdef MOZ_ORBIS_HOMEBREW_SDK\n'
+           '    // Keep the normal ACK/join and exit barrier without a nested main loop.\n'
+           '    nsCOMPtr<nsIThreadShutdown> shutdown;\n'
+           '    MOZ_ALWAYS_SUCCEEDS(thread->BeginShutdown(getter_AddRefs(shutdown)));\n'
+           '#else\n'
+           '    MOZ_ALWAYS_SUCCEEDS(thread->Shutdown());\n'
+           '#endif\n'
+           '  }\n\n  return NS_OK;\n}\n\n}  // namespace workerinternals')
+    replace_once(root, name, old, new)
+
+
 def patch_native_ipc_primitives(root):
     replace_once(root, 'ipc/chromium/src/chrome/common/process_watcher_posix_sigchld.cc',
                  '#if !defined(XP_DARWIN)\n'
@@ -1318,6 +1346,8 @@ def main():
                  '#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \\\n    defined(__DragonFly__)',
                  '#elif !defined(__ORBIS__) && (defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \\\n    defined(__DragonFly__))')
     patch_native_ipc_primitives(root)
+    patch_native_worker_shutdown(root)
+    patch_native_link_gate_debug(root)
     patch_portable_baseline_marker(root)
     replace_once(root, 'ipc/glue/SharedMemoryPlatform_posix.cpp',
                  '#include "SharedMemoryPlatform.h"\n',

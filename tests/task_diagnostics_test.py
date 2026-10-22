@@ -1,5 +1,5 @@
 """Actual task-span implementation with explicit runnable/refcount/API doubles.
-Red/green proves lifetime only, not Gecko event dispatch or firmware timing.
+Red/green proves lifetime; phase checks use a fake clock, not firmware timing.
 """
 import os
 import resource
@@ -91,7 +91,8 @@ inline bool NS_IsMainThread(){return testMain;}
 using namespace mozilla::widget;
 static uint64_t clockNow=100;
 bool testMain=true;
-extern "C" uint64_t sceKernelGetProcessTime(){return clockNow;}
+static unsigned clockReads=0;
+extern "C" uint64_t sceKernelGetProcessTime(){++clockReads;return clockNow;}
 static unsigned destroyed=0,names=0;
 struct Runnable final:nsIRunnable,nsINamed {
  unsigned references=0;
@@ -162,6 +163,32 @@ int main(){
  // A backwards clock cannot create a bogus long completion.
  {nsCOMPtr<nsIRunnable> runnable=new Runnable();OrbisMainTaskSpan span(runnable);--clockNow;}
  assert(GetOrbisTaskDiagnostics().completedSerial==34);
+ // Phase observation is disabled without opt-in, including process clock reads.
+ auto pump=GetOrbisPumpDiagnostics();assert(pump.phase==0&&pump.activeStart==0);
+ const auto reads=clockReads;
+ {OrbisPumpSpan disabled(false);clockNow+=10;disabled.SetPhase(OrbisPumpPhase::Input);}
+ assert(clockReads==reads&&GetOrbisPumpDiagnostics().phase==0);
+ testMain=false;
+ {OrbisPumpSpan worker(true);worker.SetPhase(OrbisPumpPhase::Input);}
+ assert(clockReads==reads);testMain=true;
+ {
+  OrbisPumpSpan outer(true);clockNow+=10;outer.SetPhase(OrbisPumpPhase::Input);
+  const auto parent=GetOrbisPumpDiagnostics();assert(parent.phase==2);
+  clockNow+=20;
+  {OrbisPumpSpan nested(true);clockNow+=30;nested.SetPhase(OrbisPumpPhase::Map);clockNow+=40;}
+  pump=GetOrbisPumpDiagnostics();assert(pump.phase==2&&pump.activeStart==parent.activeStart);
+  clockNow+=50;outer.SetPhase(OrbisPumpPhase::Mailbox);
+  pump=GetOrbisPumpDiagnostics();assert(pump.lastMicros[2]==140&&pump.lastMicros[4]==40);
+  clockNow+=7;outer.SetPhase(OrbisPumpPhase::Present);clockNow+=11;
+ }
+ pump=GetOrbisPumpDiagnostics();assert(pump.phase==0&&pump.activeStart==0);
+ assert(pump.lastMicros[1]==30&&pump.lastMicros[3]==7&&pump.lastMicros[5]==11);
+ assert(pump.maxMicros[2]==140&&pump.maxMicros[4]==40);
+ {OrbisPumpSpan backwards(true);--clockNow;}
+ pump=GetOrbisPumpDiagnostics();assert(pump.lastMicros[1]==0&&pump.maxMicros[1]==30&&pump.phase==0);
+ const auto fail=[](){OrbisPumpSpan scope(true);scope.SetPhase(OrbisPumpPhase::Map);clockNow+=9;return -1;};
+ assert(fail()==-1);pump=GetOrbisPumpDiagnostics();
+ assert(pump.phase==0&&pump.activeStart==0&&pump.lastMicros[4]==9&&pump.maxMicros[4]==40);
 }
 ''')
             native = (ROOT / 'gecko/orbisfox/native/main.cpp').read_text()

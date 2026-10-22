@@ -399,17 +399,25 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
     try {if(background&&previous)ui.selectContent(previous.id);else if(!selectTab(id))throw new Error("Unable to select new tab");bindTab(tab);const context=element.frameLoader?.browsingContext;if(context)context.fullZoom=tab.zoom/100;return tab;}
     catch(error){tabs.splice(tabs.indexOf(tab),1);dispose(tab);active=previous;if(previous)ui.selectContent(previous.id);throw error;}
   };
+  const closeStep=(phase,operation)=>{
+    let start=null;try{if(host.diagnosticsEnabled===true)start=chrome.docShell.domWindow.performance.now();}catch(_){}
+    try{return operation();}finally{
+      if(start!==null)try{const ms=chrome.docShell.domWindow.performance.now()-start;
+        if(Number.isFinite(ms)&&ms>=250)host.log('Browser tab cleanup: '+JSON.stringify({phase,ms}));
+      }catch(_){} // Diagnostic failures must not mask cleanup or its original error.
+    }
+  };
   const dispose=tab=>{
     if(tab.disposed)return;tab.disposed=true;tab.closed=true;
-    if(tab.progress&&tab.listener)try{tab.progress.removeProgressListener(tab.listener);}catch(error){host.log("ERROR: tab listener cleanup: "+error);}
-    if(tab.nav)try{tab.nav.stop(Ci.nsIWebNavigation.STOP_ALL);}catch(error){host.log("ERROR: tab stop: "+error);}
-    ui.removeContent(tab.id);tab.nav=tab.progress=tab.listener=tab.element=tab.beforeLoad=null;
+    if(tab.progress&&tab.listener)try{closeStep('remove-listener',()=>tab.progress.removeProgressListener(tab.listener));}catch(error){host.log("ERROR: tab listener cleanup: "+error);}
+    if(tab.nav)try{closeStep('stop-load',()=>tab.nav.stop(Ci.nsIWebNavigation.STOP_ALL));}catch(error){host.log("ERROR: tab stop: "+error);}
+    closeStep('detach-frame',()=>ui.removeContent(tab.id));tab.nav=tab.progress=tab.listener=tab.element=tab.beforeLoad=null;
   };
   const closeTab=(id=active?.id)=>action(()=>{
     if(ui.isEditing())throw new Error("Finish editing before closing a tab");if(tabs.length<=1)throw new Error("Keep one real tab; use Exit to close browser");
     const index=tabs.findIndex(t=>t.id===id);if(index<0)throw new Error("Unknown tab");const tab=tabs[index];
     const selected=tab===active;closedTabs.push(tab.model.location,tab.model.title);tab.closed=true;tabs.splice(index,1);
-    if(selected)selectTab(tabs[Math.min(index,tabs.length-1)].id);
+    if(selected)closeStep('select-replacement',()=>selectTab(tabs[Math.min(index,tabs.length-1)].id));
     dispose(tab);host.log("Browser UI: real tab closed "+id);return true;
   });
   const validField=field=>field?.isConnected&&field.ownerDocument?.nodePrincipal.isSystemPrincipal===false&&!field.disabled&&!field.readOnly&&
@@ -512,8 +520,9 @@ function runOrbisFoxBrowserShell(Cc,Ci,host,io,tm,ssm,profile) {
       const timing=start===null?null:{start,last:start,phase:'native-actions',phases:{}};
       try {
         ++ticks;
-        if(ui&&host.takeNativeChromeAction)for(let i=0;i<16;++i){const command=host.takeNativeChromeAction();if(!command)break;
-          host.log('Native chrome: dequeued '+command+' handled='+(!keyboardReleasePending&&ui.nativeCommand(command)));lastNativeScene='';if(!alive)break;}
+        // A tab teardown can run page handlers; leave later commands queued for the next tick.
+        if(ui&&host.takeNativeChromeAction){const command=host.takeNativeChromeAction();if(command){
+          host.log('Native chrome: dequeued '+command+' handled='+(!keyboardReleasePending&&ui.nativeCommand(command)));lastNativeScene='';}}
         tickPhase(timing,'pump');
         if(!alive||!host.pumpFrame()){alive=false;return;}
         tickPhase(timing,'chrome-init');

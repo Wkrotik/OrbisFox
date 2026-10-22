@@ -4,6 +4,8 @@
 #include "OrbisFoxHost.h"
 #include "OrbisGfxInfo.h"
 #include "OrbisCompositorWidget.h"
+#include "OrbisTaskDiagnostics.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/orbisfox/OrbisExecutableMemory.h"
 #include "mozilla/orbisfox/OrbisAudioBackend.h"
@@ -230,6 +232,7 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
   *aContinue = false;
   NS_ENSURE_TRUE(NS_IsMainThread(), NS_ERROR_NOT_SAME_THREAD);
   NS_ENSURE_TRUE(sCallbacks.present && sCallbacks.poll, NS_ERROR_NOT_INITIALIZED);
+  OrbisPumpSpan pumpDiagnostics(sCallbacks.diagnosticsEnabled && sCallbacks.diagnosticsEnabled(sCallbacks.context));
   const bool trace = mPumpTraces < 8;
   if (trace) ++mPumpTraces;
   const auto traceStage = [&](const char* message) {
@@ -274,7 +277,10 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
   // The callback normalizes controller controls: bit 0 is the primary button,
   // bit 1 requests fixture reload. Use Gecko's real headless input dispatch.
   nsCOMPtr<nsIWidget> widget = mWidget;
+  pumpDiagnostics.SetPhase(OrbisPumpPhase::Input);
   const bool controllerIntent = (mButtons & 8190) != 0;
+  const auto inputStarted = TimeStamp::Now();
+  bool deferredPointer = false;
   // Publish edge snapshot before dispatch, which may change pointer ownership.
   mPointerButtons = mButtons;
   if (widget && mPointerEnabled && controllerIntent && mMouseDown) {
@@ -292,8 +298,11 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
   bool replayedPointer = false;
   if (sCallbacks.pointerEvent) {
     for (unsigned i = 0; i < 16; ++i) {
+      // Yield between complete edges, never inside page dispatch or by dropping input.
+      if ((TimeStamp::Now() - inputStarted).ToMilliseconds() >= 4.0) {deferredPointer = true;break;}
       int32_t x = 0, y = 0; bool down = false;uint32_t button=0;
       if (!sCallbacks.pointerEvent(sCallbacks.context, &x, &y, &down,&button)) break;
+      if (i == 15) deferredPointer = true;
       NS_ENSURE_TRUE(x >= 0 && x < 1280 && y >= 0 && y < 720 && (button==1||button==8192), NS_ERROR_INVALID_ARG);
       bool& held=button==1?mMouseDown:mMiddleDown;
       if (!widget || !mPointerEnabled || controllerIntent || down == held) continue;
@@ -308,7 +317,8 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
           button==1?MouseButton::ePrimary:MouseButton::eMiddle, nsIWidget::NativeModifiers::NO_MODIFIERS, nullptr));
     }
   }
-  if (widget && mPointerEnabled && !controllerIntent) {
+  // A latest-state snapshot must not overtake edges still in the native queue.
+  if (widget && mPointerEnabled && !controllerIntent && !deferredPointer) {
     const LayoutDeviceIntPoint point(mCursorX, mCursorY);
     const auto mods = nsIWidget::NativeModifiers::NO_MODIFIERS;
     if (oldX != mCursorX || oldY != mCursorY || replayedPointer) {
@@ -331,6 +341,7 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
   }
   traceStage("Gecko pump: input synthesis returned; frame mailbox entered");
   uint64_t sequence = 0;
+  pumpDiagnostics.SetPhase(OrbisPumpPhase::Mailbox);
   RefPtr<gfx::DataSourceSurface> surface = OrbisCompositorWidget::GetLatestFrame(&sequence);
   traceStage(surface ? "Gecko pump: frame mailbox returned a surface" :
                        "Gecko pump: frame mailbox returned no surface");
@@ -344,6 +355,7 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
       return NS_ERROR_UNEXPECTED;
     }
     traceStage("Gecko pump: surface mapping entered");
+    pumpDiagnostics.SetPhase(OrbisPumpPhase::Map);
     gfx::DataSourceSurface::ScopedMap map(surface, gfx::DataSourceSurface::READ);
     traceStage("Gecko pump: surface mapping returned");
     if(!(map.IsMapped() && map.GetData() && map.GetStride() >= size.width * 4 && map.GetStride() <= 8192)){
@@ -353,6 +365,7 @@ NS_IMETHODIMP OrbisFoxHost::PumpFrame(bool* aContinue) {
       return NS_ERROR_UNEXPECTED;
     }
     traceStage("Gecko pump: native presentation entered");
+    pumpDiagnostics.SetPhase(OrbisPumpPhase::Present);
     const bool presented = sCallbacks.present(sCallbacks.context, map.GetData(), size.width,
                                               size.height, map.GetStride());
     traceStage("Gecko pump: native presentation returned");

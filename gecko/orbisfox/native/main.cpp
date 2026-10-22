@@ -178,6 +178,11 @@ void* monitor(void* opaque) {
     fprintf(output,"main-task sample=%u depth=%u active-age-us=%llu events=%llu long-events=%llu last-us=%llu max-inclusive-us=%llu last-long-name=%s detail-us=%llu detail-name=%s\n",
       sample,tasks.depth,(unsigned long long)(tasks.activeStart&&taskNow>=tasks.activeStart?taskNow-tasks.activeStart:0),
       (unsigned long long)tasks.events,(unsigned long long)tasks.longEvents,(unsigned long long)tasks.lastMicros,(unsigned long long)tasks.maxMicros,tasks.lastLongName,(unsigned long long)tasks.lastDetailedMicros,tasks.lastDetailedName);
+    const auto pump=mozilla::widget::GetOrbisPumpDiagnostics();
+    fprintf(output,"pump-phases sample=%u phase=%u active-age-us=%llu last-us=%llu,%llu,%llu,%llu,%llu max-us=%llu,%llu,%llu,%llu,%llu; order=poll,input,mailbox,map,present; 0=idle; inclusive approximate samples\n",
+      sample,pump.phase,(unsigned long long)(pump.activeStart&&taskNow>=pump.activeStart?taskNow-pump.activeStart:0),
+      (unsigned long long)pump.lastMicros[1],(unsigned long long)pump.lastMicros[2],(unsigned long long)pump.lastMicros[3],(unsigned long long)pump.lastMicros[4],(unsigned long long)pump.lastMicros[5],
+      (unsigned long long)pump.maxMicros[1],(unsigned long long)pump.maxMicros[2],(unsigned long long)pump.maxMicros[3],(unsigned long long)pump.maxMicros[4],(unsigned long long)pump.maxMicros[5]);
     const auto glyphs=orbisfox::missing_glyph_stats();
     if(glyphs.draws!=lastMissingGlyphDraws){
       fprintf(output,"missing-glyph sample=%u draws=%llu codepoints-first64=",sample,(unsigned long long)glyphs.draws);

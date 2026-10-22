@@ -26,5 +26,21 @@ class OrbisMainTaskSpan {
   ~OrbisMainTaskSpan();
 };
 OrbisTaskDiagnostics GetOrbisTaskDiagnostics();
+// Inclusive, approximate phase samples; zero means idle/disabled. No page data.
+enum class OrbisPumpPhase : unsigned { Idle, Poll, Input, Mailbox, Map, Present, Count };
+struct OrbisPumpDiagnostics {
+ unsigned phase=0;uint64_t activeStart=0;
+ uint64_t lastMicros[unsigned(OrbisPumpPhase::Count)]{},maxMicros[unsigned(OrbisPumpPhase::Count)]{};
+};
+class OrbisPumpSpan {
+ bool tracked_=false;unsigned phase_=0,previousPhase_=0;uint64_t start_=0,previousStart_=0;
+ OrbisPumpSpan(const OrbisPumpSpan&)=delete;
+ OrbisPumpSpan& operator=(const OrbisPumpSpan&)=delete;
+ public:
+ explicit OrbisPumpSpan(bool enabled);
+ ~OrbisPumpSpan();
+ void SetPhase(OrbisPumpPhase phase);
+};
+OrbisPumpDiagnostics GetOrbisPumpDiagnostics();
 }
 #endif

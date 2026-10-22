@@ -2,6 +2,13 @@
 #include <functional>
 #include <cstdint>
 #include <vector>
+static double fakeMilliseconds=0;
+struct TimeStamp {
+ double value;
+ static TimeStamp Now(){return {fakeMilliseconds};}
+ TimeStamp operator-(TimeStamp other)const{return {value-other.value};}
+ double ToMilliseconds()const{return value;}
+};
 struct Callbacks {void* context=nullptr;bool(*pointerEvent)(void*,int32_t*,int32_t*,bool*,uint32_t*)=nullptr;} sCallbacks;
 struct Edge {int32_t x,y;bool down;uint32_t button=1;};
 struct EdgeQueue {std::vector<Edge> edges;size_t next=0;};
@@ -67,6 +74,30 @@ int main(){
     assert(!host.pump(0));assert(activations==1);
     queue={{{120,300,true},{120,300,false}},0};host.SetPointerInputEnabled(false);assert(!host.pump(0));assert(queue.next==2&&activations==1);
     host.SetPointerInputEnabled(true);queue={{{1280,0,true}},0};assert(host.pump(0)==NS_ERROR_INVALID_ARG);
+    sCallbacks={};
+  }
+  // A slow handler yields between complete edges, never consuming queued input
+  // or applying a newer polled release ahead of an older queued press.
+  for(unsigned button: {1u,8192u}){
+    nsIWidget widget;TestHost host(widget);
+    EdgeQueue queue{{{120,300,true,button},{120,300,false,button},{120,300,true,button},{120,300,false,button}},0};
+    sCallbacks={&queue,edgeCallback};fakeMilliseconds=0;
+    widget.callback=[&](Msg msg){if(msg==Msg::Move)fakeMilliseconds+=5;};
+    for(unsigned i=1;i<=4;++i){
+      assert(!host.pump(0));assert(queue.next==i);
+      assert(widget.down==(i+1)/2&&widget.up==i/2);
+      assert((button==1?host.mMouseDown:host.mMiddleDown)==bool(i%2));
+    }
+    assert(!host.pump(0));assert(widget.down==2&&widget.up==2);
+    sCallbacks={};
+  }
+  // Even cheap queues retain FIFO ownership across the existing 16-edge cap.
+  {
+    nsIWidget widget;TestHost host(widget);EdgeQueue queue;
+    for(unsigned i=0;i<18;++i)queue.edges.push_back({120,300,bool(!(i%2))});
+    sCallbacks={&queue,edgeCallback};assert(!host.pump(1));
+    assert(queue.next==16&&widget.down==8&&widget.up==8&&!host.mMouseDown);
+    assert(!host.pump(0));assert(queue.next==18&&widget.down==9&&widget.up==9);
     sCallbacks={};
   }
   // Real middle edges use independent ownership and survive delayed polling.
