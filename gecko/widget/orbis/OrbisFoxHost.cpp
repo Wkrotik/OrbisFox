@@ -34,7 +34,11 @@ NS_IMETHODIMP OrbisFoxHost::GetNativeNetworkReady(bool* aReady) {
 NS_IMETHODIMP OrbisFoxHost::GetNativeJitReady(bool* aReady) {
   NS_ENSURE_ARG_POINTER(aReady);
   NS_ENSURE_TRUE(NS_IsMainThread(), NS_ERROR_NOT_SAME_THREAD);
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+  *aReady = false;  // Portable CacheIR execution is not native JIT support.
+#else
   *aReady = orbisfox::orbis_jit_memory_stats().ready;
+#endif
   return NS_OK;
 }
 

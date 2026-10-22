@@ -84,7 +84,10 @@ def main():
     parser.add_argument('--mesa', action='store_true', help='Explicit experimental native Mesa build')
     parser.add_argument('--sdk', choices=('openorbis', 'homebrew'),
                         default=os.environ.get('ORBISFOX_SDK', 'openorbis'))
+    parser.add_argument('--portable-baseline', action='store_true')
     args = parser.parse_args()
+    if args.portable_baseline and args.sdk != 'homebrew':
+        parser.error('--portable-baseline requires --sdk homebrew')
     if not 1 <= args.jobs <= 16:
         parser.error('--jobs must be between 1 and 16')
     commands = prerequisite_commands(args.sdk, args.mesa, args.jobs)
@@ -94,7 +97,8 @@ def main():
     for command in commands:
         subprocess.run(command, env=env, check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/configure-gecko-layout.py'), '--sdk', args.sdk] +
-                   (['--mesa'] if args.mesa else []), env=env, check=True)
+                   (['--mesa'] if args.mesa else []) +
+                   (['--portable-baseline'] if args.portable_baseline else []), env=env, check=True)
     subprocess.run([sys.executable, str(ROOT / 'scripts/fetch-layout-assets.py')], env=env, check=True)
     revision = (native_rust_revision() if args.sdk == 'homebrew' else
                 (ROOT / 'build/rust/.abi-patch-revision').read_text())
@@ -116,6 +120,7 @@ def main():
     errors = build_errors(text)
     report = {'stage': 'full Gecko cross-build', 'result': result.returncode,
               'experimental_mesa': args.mesa, 'sdk': args.sdk,
+              'portable_baseline': args.portable_baseline,
               'configure_report_sha256': hashlib.sha256((BUILD / 'configure-report.json').read_bytes()).hexdigest(),
               'rust_abi_revision': revision,
               'log': str(log.relative_to(ROOT)),

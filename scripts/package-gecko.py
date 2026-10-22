@@ -208,6 +208,9 @@ def native_package_report(report, app, native):
             'browser_custom_keyboard_hardware_verified')
     result = {key: report[key] for key in keys}
     result.update(sdk='homebrew', sdk_identity=native['identity'],
+                  jit_backend_compiled=app.get('jit_backend_compiled', True),
+                  portable_baseline_interpreter_compiled=app.get('portable_baseline_interpreter_compiled', False),
+                  portable_baseline_console_execution_verified=False,
                   self_authinfo=native['authinfo'],
                   native_application_report_sha256=hashlib.sha256(
                       (ROOT / 'build/gecko-app-homebrew/build-report.json').read_bytes()).hexdigest(),
@@ -531,7 +534,10 @@ def main(argv=None):
         'html_rendered_on_console': False, 'fixture_dom_assertions_executed_on_console': False,
         'hardware_tested': False, 'baseline_0_11_unchanged': unchanged,
         'baseline_0_11_sha256': baseline, 'network_navigation_enabled_after_runtime_safety_gates': True,
-        'sandbox_enabled': False, 'jit_enabled': None, 'jit_backend_compiled': True,
+        'sandbox_enabled': False, 'jit_enabled': None,
+        'jit_backend_compiled': app.get('jit_backend_compiled', True),
+        'portable_baseline_interpreter_compiled': app.get('portable_baseline_interpreter_compiled', False),
+        'portable_baseline_console_execution_verified': False,
         'jit_native_capability_gated': True, 'jit_firmware_verified': False,
         'native_audioout_backend_implemented': True, 'audio_playback_firmware_verified': False,
         'static_ffvpx_real_codec_binding_implemented': True,

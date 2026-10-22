@@ -113,9 +113,12 @@ def main():
     parser.add_argument('--sdk', choices=('openorbis', 'homebrew'),
                         default=os.environ.get('ORBISFOX_SDK', 'openorbis'))
     parser.add_argument('--mesa', action='store_true', help='Compile the default-off Mesa/WebRender experiment')
+    parser.add_argument('--portable-baseline', action='store_true', help='Native-SDK interpreter-only experiment; no generated code')
     args = parser.parse_args()
     if args.sdk not in ('openorbis', 'homebrew'):
         parser.error('Unknown ORBISFOX_SDK: ' + args.sdk)
+    if args.portable_baseline and args.sdk != 'homebrew':
+        parser.error('--portable-baseline requires --sdk homebrew')
     prepare_source(args.sdk)
     if args.prepare_only:
         return 0
@@ -179,6 +182,9 @@ def main():
     if native_sdk:
         # Retain ABI caches; generic FreeBSD otherwise defaults the interpreter to -O1.
         command.extend(['--disable-cargo-incremental', '--enable-optimize=-O2'])
+    if args.portable_baseline:
+        command.extend(['--disable-jit', '--enable-portable-baseline-interp',
+                        '--enable-portable-baseline-interp-force'])
     log = BUILD / 'configure-output.log'
     with log.open('w') as output:
         result = subprocess.run(command, cwd=BUILD, env=env,
@@ -192,6 +198,7 @@ def main():
               or 'Error processing test manifest' in line]
     report = {'revision': REVISION, 'stage': 'full Gecko cross-configuration',
               'experimental_mesa': args.mesa, 'sdk': args.sdk,
+              'portable_baseline': args.portable_baseline,
               'sdk_identity': sdk_identity, 'service_headers': service_headers,
               'result': result.returncode, 'command': command,
               'optimization_flags': json.loads((BUILD / 'config.status.json').read_text())['substs']['MOZ_OPTIMIZE_FLAGS'] if result.returncode == 0 else [],

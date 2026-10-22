@@ -219,6 +219,28 @@ def native_link_command(sdk, runtime, elf, inputs):
             '-lSceLibcInternal', '-lSceSysmodule', '-lSceNet']
 
 
+def portable_baseline_bodies(symbol_table):
+    # Template bodies may be weak FUNCs; a weak data table is not executable proof.
+    bodies = []
+    for line in symbol_table.splitlines():
+        fields = line.split(None, 7)
+        if (len(fields) == 8 and fields[3] == 'FUNC' and fields[6] != 'UND' and
+                fields[2].isdigit() and int(fields[2]) > 0 and
+                fields[7].startswith('js::pbl::PBIResult js::pbl::PortableBaselineInterpret<')):
+            bodies.append(line.strip())
+    return bodies
+
+
+def require_portable_baseline(config, report, requested):
+    defines = config.get('defines', {})
+    enabled = bool(defines.get('ENABLE_PORTABLE_BASELINE_INTERP'))
+    if enabled != requested or bool(report.get('portable_baseline')) != requested:
+        raise RuntimeError('Requested portable interpreter does not match the built engine')
+    if requested and not (defines.get('JS_CODEGEN_NONE') and
+                          defines.get('ENABLE_PORTABLE_BASELINE_INTERP_FORCE')):
+        raise RuntimeError('Portable experiment requires codegen-none and explicit runtime selection')
+
+
 def require_engine_sdk(config, sdk):
     if sdk == 'openorbis':
         require_openorbis_engine(config)
@@ -234,7 +256,10 @@ def main():
     parser.add_argument('--mesa', action='store_true', help='Explicit experimental native Mesa link')
     parser.add_argument('--sdk', choices=('openorbis', 'homebrew'),
                         default=os.environ.get('ORBISFOX_SDK', 'openorbis'))
+    parser.add_argument('--portable-baseline', action='store_true')
     args = parser.parse_args()
+    if args.portable_baseline and args.sdk != 'homebrew':
+        parser.error('--portable-baseline requires --sdk homebrew')
     if args.sdk not in ('openorbis', 'homebrew') or not 1 <= args.jobs <= 32:
         parser.error('Select a known SDK and jobs in 1..32')
     native_sdk = args.sdk == 'homebrew'
@@ -244,12 +269,14 @@ def main():
     BUILD = ROOT / ('build/gecko-app-homebrew' if native_sdk else 'build/gecko-app')
     if not args.skip_engine_build:
         run([sys.executable, ROOT / 'scripts/build-gecko-layout.py', '--jobs', args.jobs, '--sdk', args.sdk] +
-            (['--mesa'] if args.mesa else []))
+            (['--mesa'] if args.mesa else []) +
+            (['--portable-baseline'] if args.portable_baseline else []))
     engine_report = json.loads((ENGINE / 'build-report.json').read_text())
     if not engine_report.get('full_engine_linked'):
         raise RuntimeError('Strict full Gecko link must succeed before the application build')
     engine_config = json.loads((ENGINE / 'config.status.json').read_text())
     require_engine_sdk(engine_config, args.sdk)
+    require_portable_baseline(engine_config, engine_report, args.portable_baseline)
     if native_sdk:
         run([sys.executable, ROOT / 'scripts/fetch-native-font-header.py'])
     native_inputs = native_runtime_inputs() if native_sdk else None
@@ -421,6 +448,8 @@ def main():
                   for directory in ('gecko','src','include') for p in sorted((ROOT / directory).rglob('*'))
                   if p.is_file() and p.suffix != '.md' and '__pycache__' not in p.parts},
               'sdk': args.sdk,
+              'portable_baseline_interpreter_compiled': args.portable_baseline,
+              'jit_backend_compiled': not bool(engine_config['defines'].get('JS_CODEGEN_NONE')),
               'sdk_identity': native_inputs['sdk_identity'] if native_sdk else None,
               'native_font_header': native_inputs['font_header'] if native_sdk else None,
               'isolated_software_codecs': media_report,
@@ -458,6 +487,13 @@ def main():
         clock_names = {'clock_gettime', 'clock_getres', 'pthread_condattr_setclock', 'pthread_condattr_getclock'}
         text_symbols = {parts[-1] for line in defined.splitlines()
                         if len(parts := line.split()) >= 3 and parts[-2] == 'T'}
+        if args.portable_baseline:
+            bodies = subprocess.check_output(['llvm-readelf', '--symbols', '--demangle', str(elf)], text=True)
+            cores = portable_baseline_bodies(bodies)
+            if 'OrbisPortableBaselineEntered' not in text_symbols or not cores:
+                raise RuntimeError('Final native ELF lacks the portable interpreter core or execution marker')
+            report['portable_baseline_core_defined_bodies'] = cores
+            report['portable_baseline_console_execution_verified'] = False
         undefined_names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
         if not native_sdk and (not clock_names <= text_symbols or clock_names & undefined_names):
             raise ValueError('Required SDK-to-firmware clock boundary was not installed in the executable')

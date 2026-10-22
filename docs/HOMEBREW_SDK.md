@@ -202,6 +202,80 @@ Websites may ignore it or require reload before adapting. Leave it off for the
 initial O2 comparison, then compare it independently. Host tests do not establish
 how a particular console website responds to live preference changes.
 
+### Portable Baseline Interpreter: isolated host gate
+
+Checkpoint `0efacd9` retains the O2/reduced-motion/stall-diagnostics candidate.
+The isolated host command does not modify the native configure lane, its object
+tree, application policy or package. From this dev checkout, run:
+
+```sh
+python3 scripts/test-portable-baseline.py --jobs 2
+python3 -m unittest discover -s tests -p 'portable_baseline_test.py'
+```
+
+This requires the existing pinned `.deps/gecko-layout` sources, Linux host
+Clang/Rust/cbindgen, Bubblewrap and GDB. It builds a separate, interpreter-only
+SpiderMonkey shell in `build/portable-baseline-host/` using `-O2`, without Intl
+or debug symbols. Nothing is fetched, installed or deployed by this command.
+The protected sibling `orbisfox` checkout, when present, is mounted read-only.
+
+Both modes use `--no-jit-backend` before JS initialization. The portable mode
+needs **both** `--portable-baseline` and `--portable-baseline-eager`: eager alone
+only changes the warmup threshold and can silently leave the generic interpreter
+running. The generic control explicitly disables the portable backend. Check
+`probe-report.json` and the retained per-mode logs, not just a successful build.
+GDB must observe actual entry into `js::pbl::PortableBaselineInterpret` only in
+the portable mode; merely finding a symbol or setting a breakpoint is not proof.
+
+The first host gate passed property/getter/proxy/call/closure/exception, typed
+array, regular expression, retained-object GC, generator/async fallback and
+stack-overflow checks. Both modes produced matching results and honored a
+0.1-second interrupt with shell exit status 6. This is a small semantic probe,
+not the complete upstream suite, GC-zeal testing, a browser benchmark or PS4
+proof. Its elapsed times include explicit GC and cannot predict console stalls.
+A native candidate still needs build/runtime selection, ABI and memory/stack
+validation while retaining the genuine denied-JIT fallback. No speedup or
+console compatibility is established by the host gate.
+
+### Portable Baseline Interpreter: opt-in native candidate
+
+After the host gate, select the experiment explicitly (native SDK only):
+
+```sh
+python3 scripts/build-gecko-app.py --sdk homebrew --portable-baseline --jobs 4
+python3 scripts/package-gecko.py --sdk homebrew --resource-format omni
+```
+
+The configure producer passes `--disable-jit`,
+`--enable-portable-baseline-interp` and
+`--enable-portable-baseline-interp-force`. The last option actually selects the
+portable backend; it is not the host shell's eager/warmup-only switch. Native
+code generation is absent (`JS_CODEGEN_NONE`). The normal warmup threshold and
+upstream generic fallbacks for unsupported scripts remain intact. O2, SWGL,
+GC policy and the reversible reduced-motion setting are otherwise unchanged.
+
+The application disables the native JIT backend before JS initialization and
+skips executable-memory probing in this mode: portable CacheIR execution needs
+no permission bypass or generated code. `nativeJitReady` remains false; native
+RegExp JIT, Ion and Wasm are not advertised. Builds without the experiment retain
+the genuine owned-code W^X capability gate and denied-JIT fallback unchanged.
+Rebuilding with `--skip-engine-build` rejects a mismatched configured mode.
+
+Final-ELF validation requires nonempty defined portable-core FUNC bodies (weak
+C++ template bodies are valid; data tables/imports are not). The core sets one
+atomic bit on entry. Existing opt-in heartbeat logs report
+`portable-baseline ... core-entered=1 native-codegen=0` after actual entry;
+`core-entered=0` is not execution proof. This observes entry only, not correct
+completion of every script, coverage, time spent or a performance improvement.
+Nothing enables diagnostics automatically.
+
+Native linking and package extraction are separate gates from console startup,
+stack/GC behavior and website compatibility. No console execution or speedup is
+established yet. The prior package, ELF and reports are retained together under
+`build/hardware-0.68-homebrew/retained/pre-portable-baseline-*`; the host probe's
+`native-rollback-path.txt` records the exact private local retention path. uBO
+and collector-policy changes are intentionally excluded from this comparison.
+
 ### Console exit finding
 
 The first native probe completed all 52 checks, closed its result file and printed

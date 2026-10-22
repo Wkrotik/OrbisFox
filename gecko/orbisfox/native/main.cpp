@@ -25,6 +25,9 @@
 #include "../OrbisGlyphDiagnostics.h"
 #include "../OrbisTableFault.h"
 #include "js/Initialization.h"
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+extern "C" bool OrbisPortableBaselineEntered();
+#endif
 #include "orbisfox/jit_memory_probe.h"
 #include "orbisfox/browser_controls.h"
 static_assert(ORBIS_PAD_BUTTON_OPTIONS == 0x0008 && ORBIS_PAD_BUTTON_CIRCLE == 0x2000 &&
@@ -182,6 +185,9 @@ void* monitor(void* opaque) {
       fputc('\n',output);lastMissingGlyphDraws=glyphs.draws;
     }
     if(sample%10==0){
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+      fprintf(output,"portable-baseline sample=%u core-entered=%d native-codegen=0; entry is not a speedup claim\n",sample,int(OrbisPortableBaselineEntered()));
+#endif
       const auto jit=orbisfox::orbis_jit_memory_stats();
       fprintf(output,"jit-memory sample=%u ready=%d claimed=%d shared-reserved=%zu committed=%zu phase=%u rc=0x%x\n",sample,jit.ready,jit.claimed,jit.reservedBytes,jit.committedBytes,jit.failedPhase,unsigned(jit.lastResult));
       const auto gc=orbisfox::gc_chunk_memory_stats();
@@ -515,8 +521,14 @@ int main() {
   // Capability selection must precede JS_Init, not happen in chrome JS.
   const bool audioReady=prepare_native_audio();
   fprintf(stdout,"Native AudioOut default endpoint ready=%d (silence/complete/close probe)\n",audioReady);fflush(stdout);
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+  const bool jitReady=false;
+  JS::DisableJitBackend();
+  log("Portable Baseline Interpreter: compiled codegen-none, runtime selected; no executable-memory probe or generated-code permission claim");
+#else
   const bool jitReady=sharedMemoryReady && prepare_native_jit_memory();
   if(!jitReady){JS::DisableJitBackend();log("Native baseline JIT: capability gate unavailable; supported interpreter fallback selected before JS_Init");}
+#endif
   const bool heapDebugRequested = native_diagnostics_enabled() && access("/data/orbisfox/heap-debug", F_OK) == 0;
   bool heapDiagnosticsReady = !heapDebugRequested;
 #ifdef ORBISFOX_HOMEBREW_SDK

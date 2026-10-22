@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -182,7 +183,15 @@ class GeckoAppTests(unittest.TestCase):
         self.assertIn('JS::DisableJitBackend()', main)
         self.assertLess(main.index('JS::DisableJitBackend()'), main.index('bootstrap->XRE_XPCShellMain'))
         build = (ROOT / 'scripts/configure-gecko-layout.py').read_text()
-        self.assertNotIn('--disable-jit', build)
+        tree = ast.parse(build)
+        disabled = [node for node in ast.walk(tree)
+                    if isinstance(node, ast.Constant) and node.value == '--disable-jit']
+        guarded = [node for node in ast.walk(tree) if isinstance(node, ast.If) and
+                   ast.unparse(node.test) == 'args.portable_baseline' and
+                   any(child is disable for child in ast.walk(node) for disable in disabled)]
+        self.assertEqual(len(disabled), 1)
+        self.assertEqual(len(guarded), 1)  # Only the explicit no-codegen experiment removes JIT.
+        self.assertIn('#else\n  const bool jitReady=sharedMemoryReady && prepare_native_jit_memory();', main)
         native = (ROOT / 'gecko/orbisfox/OrbisExecutableMemory.cpp').read_text()
         self.assertIn('writeStub(42)', native)
         self.assertIn('writeStub(43)', native)

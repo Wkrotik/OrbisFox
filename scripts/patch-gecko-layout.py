@@ -28,6 +28,22 @@ def freetype_guards(text):
                   text, flags=re.MULTILINE)
 
 
+def patch_portable_baseline_marker(root):
+    name = 'js/src/vm/PortableBaselineInterpret.cpp'
+    replace_once(root, name, '#include "vm/PortableBaselineInterpret.h"',
+                 '#include "vm/PortableBaselineInterpret.h"\n'
+                 '#ifdef MOZ_ORBIS_HOMEBREW_SDK\n#include "mozilla/Atomics.h"\n#endif')
+    replace_once(root, name, 'using namespace js::jit;\n',
+                 'using namespace js::jit;\n\n#ifdef MOZ_ORBIS_HOMEBREW_SDK\n'
+                 '#include "../../../orbisfox/OrbisPortableBaseline.inc"\n#endif\n')
+    replace_once(root, name,
+                 '    StackVal* restartEntryFrame, PBIResult restartCode) {\n',
+                 '    StackVal* restartEntryFrame, PBIResult restartCode) {\n'
+                 '#ifdef MOZ_ORBIS_HOMEBREW_SDK\n'
+                 '  if (!sOrbisPortableBaselineEntered) sOrbisPortableBaselineEntered = true;\n'
+                 '#endif\n')
+
+
 def patch_native_ipc_primitives(root):
     replace_once(root, 'ipc/chromium/src/chrome/common/process_watcher_posix_sigchld.cc',
                  '#if !defined(XP_DARWIN)\n'
@@ -1302,6 +1318,7 @@ def main():
                  '#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \\\n    defined(__DragonFly__)',
                  '#elif !defined(__ORBIS__) && (defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \\\n    defined(__DragonFly__))')
     patch_native_ipc_primitives(root)
+    patch_portable_baseline_marker(root)
     replace_once(root, 'ipc/glue/SharedMemoryPlatform_posix.cpp',
                  '#include "SharedMemoryPlatform.h"\n',
                  '#include "SharedMemoryPlatform.h"\n\n#ifdef __ORBIS__\n'
