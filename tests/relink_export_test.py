@@ -1,20 +1,69 @@
 import hashlib
 import importlib.util
-from pathlib import Path
+import json
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('relink_export', ROOT / 'scripts/export-relink-kit.py')
+assert SPEC is not None and SPEC.loader is not None
 EXPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EXPORT)
 
 
 class RelinkExportTest(unittest.TestCase):
+    def test_lane_specific_link_command_selection(self):
+        log = ('+ make all\n+ ld.lld -o old.elf @old.rsp\n'
+               '+ /source/.deps/sdk/bin/orbis-ld -o native.elf @native.rsp\n')
+        self.assertEqual(EXPORT.link_commands(log, homebrew=False),
+                         [['ld.lld', '-o', 'old.elf', '@old.rsp']])
+        self.assertEqual(EXPORT.link_commands(log, homebrew=True),
+                         [['/source/.deps/sdk/bin/orbis-ld', '-o', 'native.elf', '@native.rsp']])
+        self.assertEqual(EXPORT.link_commands('+ echo /sdk/bin/orbis-ld nope\n', homebrew=True), [])
+
+    def test_native_driver_verifies_sdk_and_keeps_replacement_codec_option(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = root / 'sdk'
+            crt = sdk / 'target/lib/crt1.o'
+            crt.parent.mkdir(parents=True)
+            crt.write_bytes(b'pinned-crt')
+            replacement = root / 'modified-codecs'
+            replacement.mkdir()
+            for name in ('avcodec', 'swresample', 'avutil'):
+                (replacement / ('liborbis_' + name + '.a')).write_bytes(b'modified-library')
+            spec = {'sdk': 'homebrew', 'sdk_files': {'target/lib/crt1.o': EXPORT.sha(crt)},
+                    'command': ['@SDK@/bin/orbis-ld', '@CODECS@/liborbis_avutil.a', '-o', '@OUTPUT@', '--Map=@OUTPUT@.map']}
+            (root / 'link.json').write_text(json.dumps(spec))
+            argv = ['relink.py', '--sdk', str(sdk), '--codecs', str(replacement),
+                    '--output', str(root / 'out.elf')]
+            with patch.object(sys, 'argv', argv), patch.object(subprocess, 'run') as run:
+                exec(compile(EXPORT.RELINK, str(root / 'relink.py'), 'exec'),
+                     {'__file__': str(root / 'relink.py')})
+                self.assertEqual(run.call_args_list[0].args[0],
+                                 [str(sdk / 'bin/orbis-ld'), str(replacement / 'liborbis_avutil.a'),
+                                  '-o', str(root / 'out.elf'), '--Map=' + str(root / 'out.elf.map')])
+                self.assertEqual(run.call_count, 2)
+            crt.write_bytes(b'tampered-crt')
+            with patch.object(sys, 'argv', argv), patch.object(subprocess, 'run') as run:
+                with self.assertRaises(SystemExit):
+                    exec(compile(EXPORT.RELINK, str(root / 'relink.py'), 'exec'),
+                         {'__file__': str(root / 'relink.py')})
+                run.assert_not_called()
+            spec['sdk_files'] = {'../escape': 'not-a-digest'}
+            (root / 'link.json').write_text(json.dumps(spec))
+            with patch.object(sys, 'argv', argv), patch.object(subprocess, 'run') as run:
+                with self.assertRaises(SystemExit):
+                    exec(compile(EXPORT.RELINK, str(root / 'relink.py'), 'exec'),
+                         {'__file__': str(root / 'relink.py')})
+                run.assert_not_called()
+
     def test_streaming_hash(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'sample'

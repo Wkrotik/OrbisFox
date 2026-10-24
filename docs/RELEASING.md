@@ -7,7 +7,8 @@ and the custom keyboard. Keep any release **pre-release / experimental**.
 Select `--sdk homebrew` for build/package/verification and record title ID
 **ORHB00001**, its separate homebrew profile, and the exact final source commit.
 There is no uBO implementation in this baseline. The unqualified build and
-existing relink exporter still target the historical OpenOrbis lane.
+relink exporter default still target the historical OpenOrbis lane; select
+`--sdk homebrew` explicitly when exporting the native release kit.
 
 **Publication remains blocked** until a fresh matching native-SDK package and
 complete source/relink artifacts pass the gates below. A retained developer

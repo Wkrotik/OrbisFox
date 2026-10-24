@@ -3,12 +3,12 @@
 """Fetch a pinned public ps4-homebrew-dev SDK without changing OpenOrbis."""
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
 import shutil
 import stat
 import tempfile
 import urllib.request
 import zipfile
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = 'v0.2.1'
@@ -19,6 +19,10 @@ URL = f'https://github.com/ps4-homebrew-dev/sdk/releases/download/{VERSION}/ps4-
 ARCHIVE = ROOT / '.deps/downloads' / f'ps4-homebrew-sdk-{VERSION}.zip'
 SDK = ROOT / '.deps' / f'ps4-homebrew-sdk-{VERSION}'
 MAX_EXPANDED = 32 * 1024 * 1024
+SOURCE_URL = f'https://codeload.github.com/ps4-homebrew-dev/sdk/tar.gz/{REVISION}'
+SOURCE_SHA256 = 'a866b1be6421f5c90d35a2a5e237addf3334ef2ff2c38e57fd43011f0f62ffce'
+SOURCE_BYTES = 2835935
+SOURCE_ARCHIVE = ROOT / '.deps/downloads' / f'ps4-homebrew-sdk-source-{REVISION}.tar.gz'
 
 
 def digest(path):
@@ -99,6 +103,25 @@ def verify_sdk(path=SDK):
         if source.is_symlink() or digest(source) != expected:
             raise RuntimeError('SDK input changed: ' + name)
     return report
+
+
+def fetch_source():
+    """Corresponding public CRT/runtime source for native binary redistribution."""
+    if SOURCE_ARCHIVE.is_symlink():
+        raise RuntimeError('SDK source archive must not be a symlink')
+    if not SOURCE_ARCHIVE.exists():
+        SOURCE_ARCHIVE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='sdk-source-', dir=SOURCE_ARCHIVE.parent) as tmp:
+            pending = Path(tmp) / 'source.tar.gz'
+            with urllib.request.urlopen(SOURCE_URL, timeout=60) as response:
+                data = response.read(SOURCE_BYTES + 1)
+            if len(data) != SOURCE_BYTES or hashlib.sha256(data).hexdigest() != SOURCE_SHA256:
+                raise RuntimeError('Pinned SDK source size/SHA-256 mismatch')
+            pending.write_bytes(data)
+            pending.replace(SOURCE_ARCHIVE)
+    if SOURCE_ARCHIVE.stat().st_size != SOURCE_BYTES or digest(SOURCE_ARCHIVE) != SOURCE_SHA256:
+        raise RuntimeError('Pinned SDK source size/SHA-256 mismatch')
+    return SOURCE_ARCHIVE
 
 
 def fetch():

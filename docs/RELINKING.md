@@ -1,22 +1,21 @@
 # Binary source and static-library relinking
 
-## Scope: verified exporter is legacy OpenOrbis only
+## SDK lanes and release-specific verification
 
-The instructions below describe the existing **ORBF00001/OpenOrbis** object-only
-kit. `main` now also contains the native **ps4-homebrew-dev/sdk v0.2.1** browser
-(ORHB00001); this exporter is **not yet a verified relinking route for it**.
-Do not use an old kit to satisfy a new-SDK binary release. The native application
-uses a different CRT, system libc imports and isolated C++/Rust runtimes; the
-musl allocator object and old linker command are not interchangeable with them.
+The exporter supports the native **ps4-homebrew-dev/sdk v0.2.1** browser
+(**ORHB00001**, `--sdk homebrew`) and historical **OpenOrbis/ORBF00001**
+(`--sdk openorbis`). Its default remains OpenOrbis. Native kits use the native
+CRT, system libc imports and isolated C++/Rust runtimes, not the old musl
+allocator or legacy linker command. Never mix the two lanes.
 
-Before publishing a native-SDK package, export its exact application/codec
-objects, dependency source/configuration/notices and native linker inputs, then
-successfully relink both unchanged and modified LGPL library inputs. Preserve
-the exact ELF/source binding and keep proprietary firmware libraries out. Until
-that route passes, the new binary release remains blocked; source publication
-alone does not remove this requirement.
+Each binary release still requires its own exact matching application/codec
+objects, source/configuration/notices and linker inputs, plus successful
+unchanged and modified-LGPL relink trials. An older kit or a unit-test pass does
+not verify a new binary. Preserve the matching verification records; never
+include proprietary firmware libraries in the public kit. Source publication alone does not
+remove the binary-release requirements.
 
-## Existing OpenOrbis release route
+## Matching release materials
 
 Tester releases should offer the installable `OrbisFox.pkg` first. Source and
 relinking downloads accompany it for contributors and redistribution obligations;
@@ -32,8 +31,8 @@ the producer scripts. Follow `CONTRIBUTING.md` for the complete build:
 
 ```sh
 make bootstrap
-ORBISFOX_JOBS=4 make
-make validate
+ORBISFOX_SDK=homebrew ORBISFOX_JOBS=4 make
+python3 scripts/verify-gecko-package.py --sdk homebrew
 ```
 
 The native package contains generated Gecko `about:license` resources and notices
@@ -49,18 +48,25 @@ materialized static archives, LLVM runtimes/notices, the exact linker script,
 original isolated FFmpeg archives/configuration, FFmpeg source, and project
 source. Debug information is removed, not code or symbols needed for relinking.
 It contains **no proprietary SDK or firmware modules** and does not bundle an
-SDK distribution. The required audited allocator object comes from the public
-OpenOrbis musl runtime, whose notices are retained. Obtain the public,
-hash-pinned OpenOrbis SDK with the source archive's `make bootstrap`.
+SDK distribution. A native kit additionally includes the pinned public SDK's
+corresponding CRT/runtime source archive. Fetch its matching public SDK using
+`python3 scripts/fetch-homebrew-sdk.py`; `link.json` records the SDK lane and
+hashes its input files. Legacy kits instead require the public OpenOrbis SDK
+and its audited musl allocator object, with the relevant notices retained.
 
 With clang/lld and LLVM utilities installed on Linux:
 
 ```sh
 tar -xzf orbisfox-<release>-relink.tar.gz
 python3 orbisfox-relink/relink.py \
-  --sdk /absolute/path/to/OpenOrbis/PS4Toolchain \
+  --sdk /absolute/path/to/ps4-homebrew-sdk-v0.2.1 \
   --output /absolute/path/to/orbisfox.elf
 ```
+
+For an old OpenOrbis kit, use its matching `OpenOrbis/PS4Toolchain` directory
+instead. The native SDK path is its root containing `bin/` and `target/`, not
+`target/` alone. The driver verifies the pinned native SDK inputs before linking;
+it does not prevent you from explicitly adapting your own copy for a modified SDK.
 
 `verification.json` records the exported kit's test against the release ELF.
 The execution image and every symbol record must be identical; only reordering
@@ -74,7 +80,7 @@ archives, with their public/internal definitions consistently namespaced:
 
 ```sh
 python3 orbisfox-relink/relink.py \
-  --sdk /absolute/path/to/OpenOrbis/PS4Toolchain \
+  --sdk /absolute/path/to/ps4-homebrew-sdk-v0.2.1 \
   --codecs /absolute/path/to/replacement-archives \
   --output /absolute/path/to/modified-orbisfox.elf
 ```
@@ -98,9 +104,11 @@ an explicit modified build. To use that pipeline for your fork:
 3. Use a separate checkout/output tree, or move the previous extracted
    `.deps/ffmpeg-9.0.2` aside so extraction and verification use the modified
    archive. Keep the original release materials intact.
-4. Run `python3 scripts/build-media-codecs.py --jobs 4`. This rebuilds and
-   namespaces the real codec/util/resampler archives. Use the three resulting
-   files from `build/media-codecs/native/` with `--codecs` above.
+4. Run `python3 scripts/build-media-codecs.py --sdk homebrew --jobs 4` for the
+   native release. This rebuilds and namespaces the real codec/util/resampler
+   archives in `build/media-codecs/native-homebrew/`. Legacy kits instead use
+   `--sdk openorbis` and `build/media-codecs/native/`. Supply the matching three
+   archives with `--codecs` above.
 
 The included `codec-build/` files record the release configuration and symbol
 map; they are not instructions to preserve an unmodified implementation. Users

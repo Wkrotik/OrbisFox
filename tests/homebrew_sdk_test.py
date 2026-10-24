@@ -1,14 +1,15 @@
 import hashlib
+import io
 import json
-from pathlib import Path
 import runpy
 import stat
 import struct
 import subprocess
 import tempfile
 import unittest
-from unittest import mock
 import zipfile
+from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 FETCH = ROOT / 'scripts/fetch-homebrew-sdk.py'
@@ -21,6 +22,33 @@ class HomebrewSdkTest(unittest.TestCase):
             for name, value in members:
                 z.writestr(name, value)
         return archive
+
+    def test_corresponding_source_is_bounded_pinned_and_atomic(self):
+        module = runpy.run_path(str(FETCH))
+        data = b'pinned public corresponding source'
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / 'source.tar.gz'
+            namespace = module['fetch_source'].__globals__
+            with mock.patch.dict(namespace, SOURCE_ARCHIVE=archive, SOURCE_BYTES=len(data),
+                                 SOURCE_SHA256=hashlib.sha256(data).hexdigest()):
+                with mock.patch('urllib.request.urlopen', return_value=io.BytesIO(data)):
+                    self.assertEqual(module['fetch_source'](), archive)
+                with mock.patch('urllib.request.urlopen') as fetch:
+                    module['fetch_source']()
+                    fetch.assert_not_called()
+                archive.write_bytes(b'tampered')
+                with self.assertRaisesRegex(RuntimeError, 'size/SHA-256'):
+                    module['fetch_source']()
+                archive.unlink()
+                with mock.patch('urllib.request.urlopen', return_value=io.BytesIO(data + b'extra')):
+                    with self.assertRaisesRegex(RuntimeError, 'size/SHA-256'):
+                        module['fetch_source']()
+                self.assertFalse(archive.exists())
+                target = Path(tmp) / 'elsewhere'
+                target.write_bytes(data)
+                archive.symlink_to(target)
+                with self.assertRaisesRegex(RuntimeError, 'symlink'):
+                    module['fetch_source']()
 
     def test_extract_and_preserve_executable(self):
         with tempfile.TemporaryDirectory() as tmp:

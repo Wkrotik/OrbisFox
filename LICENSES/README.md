@@ -61,10 +61,12 @@ code, stb and host-tool notices remain applicable where used. Thanking the new
 SDK's contributors does not remove those authors' rights or the existing license
 exceptions. See `../THIRD_PARTY.md` for the separate roles and exact pins.
 
-The existing verified object-only relink exporter targets the legacy OpenOrbis
-lane. It must not be advertised as a tested new-SDK relink kit. A new-SDK binary
-release remains blocked until matching corresponding-source and a usable,
-verified relinking route are supplied; publishing a package alone is insufficient.
+The object-only relink exporter has explicit legacy OpenOrbis and native-SDK
+lanes. Native kits include the pinned public SDK's corresponding CRT/runtime
+source, not proprietary firmware. Each new binary still requires matching source
+and successful unchanged/modified-library relink trials for its own exact ELF;
+unit tests or a previously verified kit do not satisfy that gate. Publishing a
+package alone is insufficient.
 
 ## Before distributing binaries
 
