@@ -59,7 +59,12 @@ and bounded commands—not live Gecko objects or font handles.
 `src/native_chrome.cpp` describe ownership. The frame mailbox rotates exclusive
 writer/mailbox/reader slots; pixel copying and scanout happen outside the small
 swap lock. The worker is joined before shared resources are released. Native
-IME temporarily pauses scanout and requires fresh input before opening.
+IME, retained for later repair, temporarily pauses scanout and requires fresh
+input before opening. The dev browser now defaults to a main-thread custom
+keyboard, using real Gecko field editors with validated page ownership. It
+masks passwords and blocks pointer/native chrome through button release on
+close. R2 is Enter while typing; it must not leak into Forward after closing.
+See `docs/HOMEBREW_SDK.md` for scope, cancel semantics and remaining limits.
 
 Do not move DOM work onto this worker or introduce nested event pumping to
 make an action appear immediate. Proper process/thread isolation is future work.

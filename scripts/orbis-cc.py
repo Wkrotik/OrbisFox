@@ -7,6 +7,18 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 args = sys.argv[1:]
+# The old target/runtime remain available only as the explicit legacy lane.
+# Homebrew builds must never fall through to the OpenOrbis header/library paths.
+mode = os.environ.get('ORBISFOX_SDK', 'openorbis')
+if mode == 'homebrew':
+    # cc-rs reconstructs this alias from Cargo's vendor=scei, os=freebsd.
+    # It is not an SDK/ABI switch: retain the actual PS4 codegen target. Keep
+    # this build-system spelling in the facade, not the native runtime driver.
+    args = ['--target=x86_64-scei-ps4' if arg == '--target=x86_64-scei-freebsd'
+            else arg for arg in args]
+    sys.exit(subprocess.call([sys.executable, str(ROOT / 'scripts/homebrew-cc.py'), *args]))
+if mode != 'openorbis':
+    sys.exit('Unknown ORBISFOX_SDK: ' + mode)
 # cc-rs puts Mozilla's CXX selector inside CXXFLAGS, after its own flags.
 cxx = '--cxx' in args
 args = [arg for arg in args if arg != '--cxx' and arg != '--target=x86_64-orbis-freebsd']

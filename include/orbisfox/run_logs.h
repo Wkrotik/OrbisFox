@@ -8,6 +8,10 @@ unsigned long long native_diagnostics_generation();
 bool copy_native_run_log_path(char* output,size_t capacity,const char* name);
 const char* native_run_log_directory();
 bool native_write_heap_audit(const char* text,size_t size);
+struct AllocatorFlightEvent;
+// Called with the existing allocator mutex held; native file APIs only.
+bool native_write_allocator_flight(const AllocatorFlightEvent* events,size_t count,
+                                  unsigned long long generation,bool force);
 // Log paths only; never move profile, databases, cache or diagnostic markers.
 inline bool make_run_log_path(char* output,size_t capacity,const char* directory,const char* name){
   if(!output || !capacity || !directory || !*directory || !name || !*name)return false;

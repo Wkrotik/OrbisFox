@@ -9,6 +9,11 @@ for(let cycle=0;cycle<32;cycle++) {
   assert.equal(new M.Settings('{"cursorSpeed":1,"searchEngine":"google"}').snapshot().colorScheme,'system');
   for(const colorScheme of ['dark','light','system']){settings.update({colorScheme});assert.equal(new M.Settings(serialized).snapshot().colorScheme,colorScheme);}
   for(const colorScheme of ['Dark',0,null,'constructor',{}])assert.throws(()=>settings.update({colorScheme}));
+  assert.equal(new M.Settings('{}').snapshot().reducedMotion,false);
+  assert.equal(new M.Settings('{"searchEngine":"google","cursorSpeed":1}').snapshot().reducedMotion,false);
+  for(const reducedMotion of [true,false]){settings.update({reducedMotion});assert.equal(new M.Settings(serialized).snapshot().reducedMotion,reducedMotion);}
+  for(const reducedMotion of [1,'true',null,{}])assert.throws(()=>settings.update({reducedMotion}));
+  const motionFailure=new M.Settings('{}',()=>{throw Error('disk failed');});assert.throws(()=>motionFailure.update({reducedMotion:true}));assert.equal(motionFailure.snapshot().reducedMotion,false);
   assert.equal(M.homeAddress('cats dogs',settings.snapshot().searchEngine),'https://duckduckgo.com/?q=cats%20dogs');
   assert.equal(M.homeAddress('cats dogs','constructor'),'https://www.google.com/search?q=cats%20dogs');
   for(const changes of [{searchEngine:'constructor'},{cursorSpeed:0},{cursorSpeed:Infinity},{cursorSpeed:'1'},{cursorSpeed:3.25}])assert.throws(()=>settings.update(changes));
@@ -44,6 +49,18 @@ for(let cycle=0;cycle<32;cycle++) {
   assert.deepEqual(array(ctrl.update(M.Buttons.down,100000)),["down"]);
   assert.deepEqual(array(ctrl.update(M.Buttons.left|M.Buttons.right,100001)),[]);
   ctrl.update(0,100002);assert.deepEqual(array(ctrl.update(M.Buttons.menu,100003)),["menu"]);
+  const keyboard=new M.Controller();
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,0)),['address']);
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,1000,true)),[],'held opener is quarantined');
+  keyboard.update(0,1010,true);assert.deepEqual(array(keyboard.update(M.Buttons.address,1020,true)),['address']);
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,1419,true)),[]);
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,1420,true)),['address']);
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,100000,true)),['address'],'repeat once, never burst');
+  assert.deepEqual(array(keyboard.update(M.Buttons.address,100001,false)),[],'held Delete cannot reopen');
+  keyboard.update(0,100002,true);assert.deepEqual(array(keyboard.update(M.Buttons.forward,100003,true)),['forward']);
+  assert.deepEqual(array(keyboard.update(M.Buttons.forward,200003,true)),[],'held R2 never repeats Enter');
+  assert.deepEqual(array(keyboard.update(M.Buttons.forward,200004,false)),[],'held Enter cannot navigate Forward');
+  keyboard.update(0,200005);assert.deepEqual(array(keyboard.update(M.Buttons.forward,200006)),['forward']);
 }
 const featureContext=vm.createContext({});vm.runInContext(source,featureContext);const model=featureContext.OrbisFoxShellModel;
 const saved=[];const bookmarks=new model.Bookmarks('[]',text=>saved.push(text));
@@ -87,7 +104,7 @@ for(const [typed,expected] of [['192.168.1.20:8080','http://192.168.1.20:8080'],
 let stored='';const extended=new model.Settings('{}',text=>{stored=text;});
 assert.deepEqual([extended.snapshot().homePage,extended.snapshot().restoreSession,extended.snapshot().globalPrivacyControl],['',false,false]);
 extended.update({homePage:'https://start.example/',restoreSession:true,globalPrivacyControl:true,searchEngine:'wikipedia'});
-assert.deepEqual(JSON.parse(JSON.stringify(new model.Settings(stored).snapshot())),{searchEngine:'wikipedia',cursorSpeed:1,defaultZoom:100,colorScheme:'system',homePage:'https://start.example/',restoreSession:true,globalPrivacyControl:true});
+assert.deepEqual(JSON.parse(JSON.stringify(new model.Settings(stored).snapshot())),{searchEngine:'wikipedia',cursorSpeed:1,defaultZoom:100,colorScheme:'system',homePage:'https://start.example/',restoreSession:true,globalPrivacyControl:true,reducedMotion:false});
 for(const changes of [{homePage:'javascript:alert(1)'},{homePage:'https://user:pw@x.example/'},{homePage:'example.com'},{homePage:'https://'+'a'.repeat(1100)+'.example/'},{restoreSession:1},{globalPrivacyControl:'yes'}])
   assert.throws(()=>extended.update(changes),JSON.stringify(changes));
 assert.equal(extended.snapshot().homePage,'https://start.example/');

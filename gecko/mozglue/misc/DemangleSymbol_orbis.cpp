@@ -6,8 +6,10 @@
 #include <cstdlib>
 #include <cstring>
 
-// The unsupported native stack-walk branch does not define this shared API.
-// Keep genuine private-libc++abi demangling independently of stack sampling.
+// On Orbis, upstream StackWalk.cpp provides this API when both dladdr and
+// _Unwind_Backtrace are available. Keep only the missing-provider fallback.
+#if !(defined(HAVE_DLADDR) && HAVE_DLADDR && \
+      defined(HAVE__UNWIND_BACKTRACE) && HAVE__UNWIND_BACKTRACE)
 namespace mozilla {
 void DemangleSymbol(const char* aSymbol, char* aBuffer, int aBufLen) {
   if (!aBuffer || aBufLen <= 0) return;
@@ -22,3 +24,4 @@ void DemangleSymbol(const char* aSymbol, char* aBuffer, int aBufLen) {
   std::free(result);
 }
 }  // namespace mozilla
+#endif

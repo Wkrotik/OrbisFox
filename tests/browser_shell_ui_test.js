@@ -11,6 +11,14 @@ class Element {
   getBoundingClientRect(){return {left:0,top:0,right:1280,bottom:720};}
   scrollBy(x,y){this.scrollDelta=[x,y];}
   querySelectorAll(){return this.document.all.filter(e=>e!==this&&this.contains(e)&&e.dataset.control);}
+  get hidden(){return this._hidden??false;}
+  set hidden(value){this._hidden=!!value;this.propertyWrites=(this.propertyWrites||0)+1;}
+  get disabled(){return this._disabled??false;}
+  set disabled(value){this._disabled=!!value;this.propertyWrites=(this.propertyWrites||0)+1;}
+  get value(){return this._value??'';}
+  set value(value){this._value=value;this.propertyWrites=(this.propertyWrites||0)+1;}
+  get title(){return this._title??'';}
+  set title(value){this._title=value;this.propertyWrites=(this.propertyWrites||0)+1;}
   get textContent(){return this._text??'';}
   set textContent(value){this._text=value;this.textWrites=(this.textWrites||0)+1;}
   getAttribute(name){return this.attributes[name]??null;}
@@ -29,9 +37,9 @@ for(let cycle=0;cycle<32;++cycle){
   document.body=new Element('body',document);
   const $=id=>document.getElementById(id);
   for(const id of ['tabs','tab-buttons','first-tab','tab','tab-title','tab-dot','first-close-tab','new-tab','close-tab','back','forward','reload','home','go','menu-button','address','content','content-deck',
-    'browser-header','browser-footer','fullscreen-notice','fullscreen-button','color-system','color-light','color-dark','bookmark-button','home-screen','home-search','home-go','bookmark-list','recent-list','recent-empty','library-panel','library-title','library-bookmarks','library-history','clear-history','library-list','library-status','library-more','settings-panel','settings-general','settings-controls','settings-general-tab','settings-controls-tab','diagnostics-toggle','diagnostics-clear','engine-google','engine-duckduckgo','engine-bing','engine-wikipedia','engine-ecosia','engine-startpage','home-page-value','home-current','home-default','restore-session','gpc-toggle','clear-site-data','site-identity','site-panel','site-host','site-connection','site-issuer','library-closed','cursor-speed','cursor-speed-label','cursor-speed-shell','default-zoom','default-zoom-label','default-zoom-shell','zoom-value','settings-status','find-bar','find-text','find-status','find-next','find-previous','find-close','menu-panel','diagnostic-panel','security','status','focus-hint','diagnostic-text'])document.all.push(new Element(id,document));
+    'browser-header','browser-footer','fullscreen-notice','fullscreen-button','color-system','color-light','color-dark','bookmark-button','home-screen','home-search','home-go','bookmark-list','recent-list','recent-empty','library-panel','library-title','library-bookmarks','library-history','clear-history','library-list','library-status','library-more','settings-panel','settings-general','settings-controls','settings-general-tab','settings-controls-tab','diagnostics-toggle','diagnostics-clear','engine-google','engine-duckduckgo','engine-bing','engine-wikipedia','engine-ecosia','engine-startpage','home-page-value','home-current','home-default','restore-session','gpc-toggle','reduced-motion','clear-site-data','site-identity','site-panel','site-host','site-connection','site-issuer','library-closed','cursor-speed','cursor-speed-label','cursor-speed-shell','default-zoom','default-zoom-label','default-zoom-shell','zoom-value','settings-status','find-bar','find-text','find-status','find-next','find-previous','find-close','menu-panel','diagnostic-panel','security','status','focus-hint','diagnostic-text','keyboard-panel','keyboard-title','keyboard-note','keyboard-draft','keyboard-password','keyboard-keys'])document.all.push(new Element(id,document));
   $('cursor-speed').min='25';$('cursor-speed').max='300';$('default-zoom').min='50';$('default-zoom').max='200';
-  $('find-bar').hidden=true;
+  $('find-bar').hidden=true;$('keyboard-panel').hidden=true;$('keyboard-password').type='password';
   for(const name of ['find-next','find-previous','find-close']){$(name).dataset.command=name;$(name).dataset.control=name;$('find-bar').appendChild($(name));}
   $('tab-buttons').appendChild($('first-tab'));$('first-tab').appendChild($('tab'));$('tab').appendChild($('tab-title'));$('tab').appendChild($('tab-dot'));$('first-tab').appendChild($('first-close-tab'));
   $('content-deck').appendChild($('content'));$('content').frameLoader={browsingContext:{isActive:true}};
@@ -42,7 +50,7 @@ for(let cycle=0;cycle<32;++cycle){
   for(const name of ['settings-general-tab','settings-controls-tab']){const e=$(name);e.dataset.command=name.replace('-tab','');e.dataset.control=e.dataset.command;$('settings-panel').appendChild(e);}
   for(const name of ['settings-general','settings-controls'])$('settings-panel').appendChild($(name));$('settings-controls').hidden=true;
   for(const name of ['diagnostics-toggle','diagnostics-clear']){const e=$(name);e.dataset.command=name;e.dataset.control=name;$('settings-general').appendChild(e);}
-  for(const name of ['engine-google','engine-duckduckgo','engine-bing','engine-wikipedia','engine-ecosia','engine-startpage','home-current','home-default','restore-session','gpc-toggle','clear-site-data','color-system','color-light','color-dark']){const e=$(name);e.dataset.command=name;e.dataset.control=name;$('settings-general').appendChild(e);}
+  for(const name of ['engine-google','engine-duckduckgo','engine-bing','engine-wikipedia','engine-ecosia','engine-startpage','home-current','home-default','restore-session','gpc-toggle','reduced-motion','clear-site-data','color-system','color-light','color-dark']){const e=$(name);e.dataset.command=name;e.dataset.control=name;$('settings-general').appendChild(e);}
   $('cursor-speed').dataset.control='cursor-speed';$('settings-general').appendChild($('cursor-speed'));
   for(const name of ['library-bookmarks','library-history','library-closed','clear-history','library-more']){const e=$(name);e.dataset.command=name.replace('library-bookmarks','bookmarks').replace('library-history','history').replace('library-closed','closed-tabs');e.dataset.control=name;$('library-panel').appendChild(e);}
   $('content-deck').appendChild($('library-panel'));$('library-panel').appendChild($('library-list'));
@@ -51,13 +59,15 @@ for(let cycle=0;cycle<32;++cycle){
     e.dataset.control='menu-'+name;e.dataset.command=name;$('menu-panel').appendChild(e);
   }
   const close=new Element('close',document);close.dataset.control='diagnostic-close';close.dataset.command='dismiss-diagnostics';$('diagnostic-panel').appendChild(close);
-  let nativeOpen=false,confirm=1,settings={searchEngine:'google',cursorSpeed:1};
+  let settings={searchEngine:'google',cursorSpeed:1};
   let bookmarkRevision=0,historyRevision=0,bookmarkReads=0,historyReads=0,pendingClear=null,closedRevision=0,closedItems=[{url:'https://closed.example/',title:'Closed page',closed:1}];
   let bookmarkItems=[{url:'https://saved.example/',title:'<not markup>'}],historyItems=Array.from({length:80},(_,i)=>({url:'https://recent.example/'+i,title:'Page '+i,lastVisit:1000000-i}));
   const calls=[],window={},context=vm.createContext({document,window,URL});vm.runInContext(fs.readFileSync('gecko/orbisfox/fixtures/browser-shell-model.js','utf8'),context);vm.runInContext(source,context);
   if(document.readyState==='loading'){assert.equal(window.OrbisFoxShell,undefined);document.readyState='complete';document.events.DOMContentLoaded();}
   const ui=window.OrbisFoxShell;
-  const actions={exitContentFullscreen:()=>{calls.push(['exit-content-fullscreen']);return true;},openKeyboard:draft=>{calls.push(['keyboard',draft]);return nativeOpen;},openTextKeyboard:draft=>{calls.push(['text-keyboard',draft]);return nativeOpen;},keyboardConfirm:()=>confirm,
+  const actions={exitContentFullscreen:()=>{calls.push(['exit-content-fullscreen']);return true;},openKeyboard:()=>assert.fail('custom keyboard must not launch native IME'),openTextKeyboard:()=>assert.fail('custom keyboard must not launch native IME'),
+    keyboardActive:value=>calls.push(['keyboard-active',value]),enterText:()=>{calls.push(['enter-text']);return true;},
+    updateText:(value,start,end)=>{calls.push(['live-text',value,start,end]);return value==='refused'?false:{value,start,end};},
     setDiagnostics:value=>{settings={...settings,diagnostics:value};calls.push(['diagnostics',value]);return true;},clearDiagnosticLogs:()=>{settings={...settings,diagnostics:false};calls.push(['clear-logs']);return {removed:3,retained:1};},
     search:text=>{calls.push(['search',text]);return true;},settings:()=>settings,saveSettings:changes=>{settings={...settings,...changes};calls.push(['settings',changes]);return true;},
     bookmarkRevision:()=>bookmarkRevision,bookmarks:()=>{++bookmarkReads;return bookmarkItems;},
@@ -76,8 +86,10 @@ for(let cycle=0;cycle<32;++cycle){
   assert(!fs.readFileSync('gecko/orbisfox/fixtures/browser.xhtml','utf8').includes('data-command="google"'));assert.equal($('back').disabled,true);assert.equal($('tab-title').textContent,'Home');assert.equal($('first-close-tab').disabled,true);
   assert(!$('home-screen').hidden);assert(!ui.canScroll());
   const unchanged=['tab-title','security','status','diagnostic-text','bookmark-button'].map(id=>[$(id),$(id).textWrites]);
+  const unchangedProperties=document.all.map(e=>[e,e.propertyWrites||0]);
   for(let repeat=0;repeat<20;++repeat){ui.renderTabs([{id:'content',...home}],'content');ui.update(home,'diagnostics',{lan:false,web:false});}
   for(const [element,writes] of unchanged)assert.equal(element.textWrites,writes,'unchanged chrome must not recreate text nodes');
+  for(const [element,writes] of unchangedProperties)assert.equal(element.propertyWrites||0,writes,'unchanged reflected properties must not dirty chrome: '+element.id);
   assert.equal($('bookmark-list').children[0].children[0].children[1].textContent,'<not markup>');
   assert.equal($('bookmark-list').children[0].children[0].children[0].className,'site-icon');
   assert.equal($('tab-dot').className,undefined);assert.match($('tab-dot').getAttribute('src'),/^data:image\/svg\+xml,/);
@@ -120,6 +132,9 @@ for(let cycle=0;cycle<32;++cycle){
   $('home-default').click();assert.equal(settings.homePage,'');assert.equal($('home-page-value').textContent,'OrbisFox Home');
   $('restore-session').click();assert.equal(settings.restoreSession,true);assert.equal($('restore-session').getAttribute('aria-checked'),'true');
   $('gpc-toggle').click();assert.equal(settings.globalPrivacyControl,true);assert.match($('gpc-toggle').textContent,/On$/);
+  assert.equal($('reduced-motion').getAttribute('aria-checked'),'false');
+  for(const enabled of [true,false]){$('reduced-motion').click();assert.equal(settings.reducedMotion,enabled);assert.equal($('reduced-motion').getAttribute('aria-checked'),String(enabled));assert.match($('reduced-motion').textContent,enabled?/On$/:/Off$/);}
+  const saveBeforeMotion=actions.saveSettings;actions.saveSettings=()=>false;$('reduced-motion').click();assert.equal(settings.reducedMotion,false);assert.equal($('reduced-motion').getAttribute('aria-checked'),'false');assert.equal($('settings-status').textContent,'Unable to save settings.');actions.saveSettings=saveBeforeMotion;
   $('clear-site-data').click();assert(!calls.some(c=>c[0]==='clear-site-data'),'first press only arms the confirmation');assert.equal($('clear-site-data').getAttribute('data-confirm'),'true');
   $('clear-site-data').click();assert(calls.some(c=>c[0]==='clear-site-data'));assert.equal($('settings-status').textContent,'Clearing cookies and site data…');
   pendingClear(false);assert.equal($('settings-status').textContent,'Some site data could not be cleared.');
@@ -151,19 +166,37 @@ for(let cycle=0;cycle<32;++cycle){
   ui.renderTabs([{id:'content',...home},{id:'content-1',title:'Google'},{id:'content-2',title:'Third'}],'content-1');assert($('new-tab').disabled);
   const button=document.all.find(e=>e.dataset.control==='tab-content-2');button.click();assert(calls.some(c=>c[0]==='select-tab'&&c[1]==='content-2'));
   ui.removeContent('content-2');ui.renderTabs([{id:'content',...home},{id:'content-1',title:'Google'}],'content-1');assert(!$('new-tab').disabled);
-  assert(!source.includes('keyValues')&&!fs.readFileSync('gecko/orbisfox/fixtures/browser.xhtml','utf8').includes('id="keyboard"'));
-  ui.control('address');assert(!ui.isEditing());assert.match($('status').textContent,/PS4 keyboard unavailable/);
+  const key=label=>{const button=$('keyboard-keys').children.flatMap(row=>row.children).find(button=>button.textContent===label);assert(button,'missing key '+label);button.click();};
+  const type=value=>{const draft=$('keyboard-password').hidden?$('keyboard-draft'):$('keyboard-password');draft.value=value;draft.setSelectionRange(value.length,value.length);for(const input of draft.events.input)input();};
+  const physical=(name,shiftKey=false)=>document.events.keydown({key:name,shiftKey,preventDefault(){}});
+  ui.control('address');assert(ui.isEditing());assert(!$('keyboard-panel').hidden);assert(!ui.canScroll());assert.equal(ui.nativeChromeScene(),'');assert(!ui.nativeCommand('8:'));
+  const before=calls.length;ui.pointerMoved();assert.equal(calls.length,before);ui.finishAddressKeyboard(2,'ignored');assert(ui.isEditing());
+  ui.control('cross');assert.equal($('keyboard-draft').value,'q');ui.control('reload');assert.equal($('keyboard-draft').value,'q ');ui.control('address');assert.equal($('keyboard-draft').value,'q');
+  key('Shift');key('A');assert.equal($('keyboard-draft').value,'qA');key('Symbols');key('\\');assert.equal($('keyboard-draft').value,'qA\\');key('ABC');
+  key('Clear');ui.control('left');ui.control('cross');assert.equal($('keyboard-draft').value,'P');
+  key('Clear');$('keyboard-draft').focus();physical('Tab');physical('Enter');assert.equal($('keyboard-draft').value,'1');
+  type('home');ui.control('forward');assert(!ui.isEditing());assert(ui.canScroll());assert(calls.some(c=>c[0]==='navigate'&&c[1]==='home'));
+  assert.equal($('keyboard-draft').value,'');assert.deepEqual(calls.filter(c=>c[0]==='keyboard-active').slice(-2),[['keyboard-active',true],['keyboard-active',false]]);
+  ui.control('address');type('refused');ui.control('forward');assert(ui.isEditing(),'failed R2 navigation keeps draft');physical('Escape');assert(!ui.isEditing());
   ui.control('menu');$('menu-diagnostics').click();assert(!$('diagnostic-panel').hidden);close.click();
   ui.control('previousTab');assert(calls.some(c=>c[0]==='relative'&&c[1]===-1));
-  nativeOpen=true;ui.control('address');assert(!ui.canScroll());const before=calls.length;ui.control('menu');ui.pointerMoved();assert.equal(calls.length,before);
-  ui.finishAddressKeyboard(2,'home');assert(ui.canScroll());assert(calls.some(c=>c[0]==='navigate'&&c[1]==='home'));
-  ui.editText('fox');assert(!ui.canScroll());ui.finishAddressKeyboard(2,'fox revised');assert(calls.some(c=>c[0]==='text'&&c[1]==='fox revised'));
-  ui.editText('fox');ui.finishAddressKeyboard(3,'');assert(!ui.isEditing());assert(calls.some(c=>c[0]==='cancel-text'));
-  confirm=2;const nativeCount=calls.filter(c=>c[0]==='keyboard').length;ui.control('address');assert.match($('focus-hint').textContent,/Circle selects/);assert.equal(calls.filter(c=>c[0]==='keyboard').length,nativeCount+1);ui.finishAddressKeyboard(2,'home');assert(ui.canScroll()); // Native remains usable on Circle-confirm systems.
-  confirm=1;ui.control('address');confirm=2;ui.finishAddressKeyboard(3,'');assert(!ui.isEditing());
-  ui.editText('ab');ui.finishAddressKeyboard(2,'F');assert(calls.some(c=>c[0]==='text'&&c[1]==='F'));
-  // Firefox-shaped find bar remains after native text entry; repeat both directions.
-  assert(ui.nativeCommand('38:'));assert(!$('find-bar').hidden&&ui.isEditing());ui.finishAddressKeyboard(2,'fox');assert(!$('find-bar').hidden&&!ui.isEditing());assert.equal($('find-text').value,'fox');
+  $('home-search').value='original';$('home-search').click();type('live search');ui.control('cancel');assert.equal($('home-search').value,'original');
+  $('home-search').click();type('fox search');ui.control('forward');assert(calls.some(c=>c[0]==='search'&&c[1]==='fox search'));
+  ui.editText('abc',{start:1,end:2});ui.control('cross');assert.equal($('keyboard-draft').value,'aqc');assert.deepEqual(calls.at(-1),['live-text','aqc',2,2]);
+  ui.control('previousTab');ui.control('address');assert.equal($('keyboard-draft').value,'qc');ui.control('cancel');assert(!ui.isEditing());assert.equal($('keyboard-draft').value,'');
+  assert(calls.some(c=>c[0]==='cancel-text'));assert(!calls.some(c=>c[0]==='text'),'live edits are not committed twice');
+  ui.editText('secret',{password:true,start:6,end:6});assert($('keyboard-draft').hidden);assert(!$('keyboard-password').hidden);assert.equal($('keyboard-password').type,'password');
+  ui.control('address');assert.equal($('keyboard-password').value,'secre');key('Done');assert.equal($('keyboard-password').value,'');
+  const enters=calls.filter(c=>c[0]==='enter-text').length;
+  ui.editText('fox');ui.control('forward');assert(!ui.isEditing());assert.equal(calls.filter(c=>c[0]==='enter-text').length,enters+1,'R2 sends Enter to the page, not browser Forward');
+  ui.editText('fox');key('Done');assert.equal(calls.filter(c=>c[0]==='enter-text').length,enters+1,'Done closes without submitting');
+  ui.editText('a',{multiline:true,start:1,end:1});ui.control('forward');assert(ui.isEditing());assert.equal($('keyboard-draft').value,'a\n');physical('Enter');assert.equal($('keyboard-draft').value,'a\n\n');physical('Escape');
+  ui.editText('x',{maxLength:1,start:1,end:1});ui.control('cross');assert.equal($('keyboard-draft').value,'x');key('Clear');key('q');assert.equal($('keyboard-draft').value,'q');ui.control('cancel');
+  ui.editText('😀',{start:2,end:2});ui.control('address');assert.equal($('keyboard-draft').value,'');ui.control('cancel');
+  ui.editText('old');type('refused');assert(!ui.isEditing());assert.equal($('keyboard-draft').value,'');
+  const forwards=calls.filter(c=>c[0]==='forward').length;assert(ui.nativeCommand('2:'));assert.equal(calls.filter(c=>c[0]==='forward').length,forwards+1,'native chrome still handles Forward outside typing');
+  // Find remains visible after R2 submits its draft.
+  assert(ui.nativeCommand('38:'));assert(!$('find-bar').hidden&&ui.isEditing());type('fox');ui.control('forward');assert(!$('find-bar').hidden&&!ui.isEditing());assert.equal($('find-text').value,'fox');
   $('find-next').click();$('find-previous').click();assert(calls.some(c=>c[0]==='find'&&c[1]==='fox'&&c[2]===true));assert.equal($('find-status').textContent,'Match found');
   $('find-text').value='missing';for(const input of $('find-text').events.input)input();assert.equal($('find-status').textContent,'No match found');
   ui.control('cancel');assert($('find-bar').hidden);const escapeBefore=calls.filter(c=>c[0]==='escape').length;ui.control('cancel');assert.equal(calls.filter(c=>c[0]==='escape').length,escapeBefore+1);
@@ -174,6 +207,6 @@ for(let cycle=0;cycle<32;++cycle){
   ui.setContentFullscreen(false);assert.equal(document.body.getAttribute('data-fullscreen'),'false');assert.equal($('fullscreen-notice').hidden,true);
   ui.control('menu');document.events.mousedown({target:$('content')});assert($('menu-panel').hidden);
   for(const fn of $('tab').events.auxclick)fn({button:1,preventDefault(){}});assert(calls.some(c=>c[0]==='close-tab'&&c[1]==='content'));
-  ui.destroy();$('menu-exit').click();assert(!calls.some(c=>c[0]==='exit'));
+  ui.editText('private',{password:true});ui.destroy();assert.equal($('keyboard-password').value,'');assert($('keyboard-panel').hidden);$('menu-exit').click();assert(!calls.some(c=>c[0]==='exit'));
 }
-console.log('Chrome UI:32 cycles explicit DOM/action doubles; real-tab element creation/select/removal/limit, native keyboard/cancel/confirm labels; no built-in keyboard; no layout or firmware proof');
+console.log('Chrome UI:32 cycles explicit DOM/action doubles; real-tab element creation/select/removal/limit, custom keyboard/R2 Enter/drafts/live edits/password masking; no layout or firmware proof');

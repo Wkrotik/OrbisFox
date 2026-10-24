@@ -2,6 +2,8 @@ import ast
 import importlib.util
 import hashlib
 import io
+import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -84,13 +86,16 @@ class GeckoLayoutTests(unittest.TestCase):
             # OS_LIBS treats bare absolute archives as -l/path. Generated
             # compiler-driver arguments must bypass that system-name rewrite.
             codec_build = ast.parse((root / 'dom/media/platforms/ffmpeg/moz.build').read_text())
-            codec_flags = [flag for node in ast.walk(codec_build)
-                           if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name)
-                           and node.target.id == 'OS_LIBS'
-                           for flag in ast.literal_eval(node.value)]
-            expected_archives = ['-Wl,' + str(ROOT / 'build/media-codecs/native' / ('liborbis_' + name + '.a'))
-                                 for name in ('avcodec', 'swresample', 'avutil')]
-            self.assertEqual(codec_flags, ['-Wl,--start-group', *expected_archives, '-Wl,--end-group'])
+            codec_choice = next(node for node in ast.walk(codec_build)
+                                if isinstance(node, ast.If)
+                                and ast.unparse(node.test) == "CONFIG['MOZ_ORBIS_HOMEBREW_SDK']")
+            for sdk, branch in (('native-homebrew', codec_choice.body), ('native', codec_choice.orelse)):
+                codec_flags = [flag for node in branch
+                               if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name)
+                               and node.target.id == 'OS_LIBS' for flag in ast.literal_eval(node.value)]
+                expected_archives = ['-Wl,' + str(ROOT / 'build/media-codecs' / sdk / ('liborbis_' + name + '.a'))
+                                     for name in ('avcodec', 'swresample', 'avutil')]
+                self.assertEqual(codec_flags, ['-Wl,--start-group', *expected_archives, '-Wl,--end-group'])
             first = {name: ((root / name).read_bytes(), (root / name).stat().st_mtime_ns)
                      for name in names}
             subprocess.run([sys.executable, str(script), str(root)], check=True,
@@ -98,6 +103,42 @@ class GeckoLayoutTests(unittest.TestCase):
             second = {name: ((root / name).read_bytes(), (root / name).stat().st_mtime_ns)
                       for name in names}
             self.assertEqual(first, second)
+
+    def test_orbis_webrender_declares_freetype_flags_without_changing_other_backends(self):
+        name = 'gfx/webrender_bindings/moz.build'
+        original = subprocess.check_output(['git', '-C', str(CONFIGURE.SOURCE),
+                                           'show', CONFIGURE.REVISION + ':' + name], text=True)
+
+        def flags(text, toolkit):
+            nodes = [node for node in ast.parse(text).body if isinstance(node, ast.If)
+                     and 'CAIRO_FT_CFLAGS' in ast.get_source_segment(text, node)]
+            self.assertEqual(len(nodes), 1)
+            context = {'CONFIG': {'MOZ_WIDGET_TOOLKIT': toolkit,
+                                  'CAIRO_FT_CFLAGS': ['-I/pinned-gecko/modules/freetype2/include']},
+                       'CXXFLAGS': ['-existing-flag']}
+            exec(compile(ast.Module(body=nodes, type_ignores=[]), name, 'exec'), context)
+            return context['CXXFLAGS']
+
+        self.assertEqual(flags(original, 'orbis'), ['-existing-flag'])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / name
+            path.parent.mkdir(parents=True)
+            path.write_text(original)
+            PATCH.patch_orbis_webrender_freetype(root)
+            transformed = path.read_text()
+            self.assertEqual(flags(transformed, 'orbis'),
+                             ['-existing-flag', '-I/pinned-gecko/modules/freetype2/include'])
+            for toolkit in ('android', 'gtk', 'windows', 'cocoa', 'uikit'):
+                self.assertEqual(flags(transformed, toolkit), flags(original, toolkit))
+            before = path.read_bytes(), path.stat().st_mtime_ns
+            PATCH.patch_orbis_webrender_freetype(root)
+            self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+            unknown = original.replace('CAIRO_FT_CFLAGS', 'UNRELATED_UNKNOWN_FLAGS')
+            path.write_text(unknown)
+            with self.assertRaises(RuntimeError):
+                PATCH.patch_orbis_webrender_freetype(root)
+            self.assertEqual(path.read_text(), unknown)
 
     def test_freetype_guards_migrate_duplicates_and_stay_idempotent(self):
         original = ('#ifdef MOZ_WIDGET_ANDROID\n'
@@ -293,8 +334,10 @@ class GeckoLayoutTests(unittest.TestCase):
         if not (build / 'mozilla-config.h').exists() or not (
                 ROOT / '.deps/gecko-layout/intl/locale/OSPreferences.h').exists():
             self.skipTest('experimental Gecko headers not generated')
+        config = json.loads((build / 'config.status.json').read_text())
+        sdk = 'homebrew' if config.get('defines', {}).get('MOZ_ORBIS_HOMEBREW_SDK') else 'openorbis'
         with tempfile.TemporaryDirectory() as directory:
-            subprocess.run([str(ROOT / 'scripts/orbis-cxx.py'), '-std=c++20', '-c',
+            result = subprocess.run([str(ROOT / 'scripts/orbis-cxx.py'), '-std=c++20', '-c',
                             '-DMOZILLA_INTERNAL_API', '-DIMPL_LIBXUL', '-DMOZ_HAS_MOZGLUE',
                             '-fno-exceptions', '-fno-rtti', '-fPIC',
                             '-fno-sized-deallocation', '-fno-aligned-new',
@@ -304,7 +347,8 @@ class GeckoLayoutTests(unittest.TestCase):
                             '-I' + str(ROOT / '.deps/gecko-layout/intl/locale'),
                             str(ROOT / 'gecko/intl/locale/orbis/OSPreferences_orbis.cpp'),
                             '-o', str(Path(directory) / 'locale.o')],
-                           check=True, capture_output=True, text=True)
+                           env=dict(os.environ, ORBISFOX_SDK=sdk), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_copy_preserves_timestamp_for_identical_input(self):
         with tempfile.TemporaryDirectory() as directory:

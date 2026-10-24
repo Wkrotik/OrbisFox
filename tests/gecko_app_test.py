@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -147,6 +148,9 @@ class GeckoAppTests(unittest.TestCase):
         self.assertNotIn('remote', content.attrib)
         self.assertNotIn('maychangeremoteness', content.attrib)
         self.assertNotIn('disabled', elements['new-tab'].attrib)
+        self.assertEqual(elements['reduced-motion'].attrib['role'], 'switch')
+        self.assertEqual(elements['reduced-motion'].attrib['aria-checked'], 'false')
+        self.assertEqual(elements['reduced-motion'].attrib['data-command'], 'reduced-motion')
         self.assertEqual(sum(node.attrib.get('role') == 'tab' for node in shell.iter()), 3)
         self.assertEqual({node.attrib.get('id') for node in shell.iter() if node.attrib.get('role') == 'tab'}, {'tab', 'settings-general-tab', 'settings-controls-tab'})
         host = (ROOT / 'gecko/orbisfox/fixtures/browser-shell-host.js').read_text()
@@ -179,7 +183,15 @@ class GeckoAppTests(unittest.TestCase):
         self.assertIn('JS::DisableJitBackend()', main)
         self.assertLess(main.index('JS::DisableJitBackend()'), main.index('bootstrap->XRE_XPCShellMain'))
         build = (ROOT / 'scripts/configure-gecko-layout.py').read_text()
-        self.assertNotIn('--disable-jit', build)
+        tree = ast.parse(build)
+        disabled = [node for node in ast.walk(tree)
+                    if isinstance(node, ast.Constant) and node.value == '--disable-jit']
+        guarded = [node for node in ast.walk(tree) if isinstance(node, ast.If) and
+                   ast.unparse(node.test) == 'args.portable_baseline' and
+                   any(child is disable for child in ast.walk(node) for disable in disabled)]
+        self.assertEqual(len(disabled), 1)
+        self.assertEqual(len(guarded), 1)  # Only the explicit no-codegen experiment removes JIT.
+        self.assertIn('#else\n  const bool jitReady=sharedMemoryReady && prepare_native_jit_memory();', main)
         native = (ROOT / 'gecko/orbisfox/OrbisExecutableMemory.cpp').read_text()
         self.assertIn('writeStub(42)', native)
         self.assertIn('writeStub(43)', native)
@@ -331,8 +343,11 @@ class GeckoAppTests(unittest.TestCase):
         self.assertIn('extern "C" unsigned char orbisfox_sdk_malloc_state[]', source)
         self.assertNotIn('const unsigned char orbisfox_sdk_malloc_state[]', source)
         self.assertIn('Failure check(const unsigned char* state) const', (ROOT / 'include/orbisfox/heap_bin_audit.h').read_text())
-        self.assertIn('if(allApiAudit || reallocContext.active)auditBins(operation,site,"before")', source)
-        self.assertIn('if(allApiAudit || reallocContext.active)auditBins(operation,site,"after")', source)
+        self.assertIn('if(auditAllBoundaries() || reallocContext.active)auditBins(operation,site,"before")', source)
+        self.assertIn('if(auditAllBoundaries() || reallocContext.active)auditBins(operation,site,"after")', source)
+        self.assertIn('if(allApiAudit)return true;', source)
+        self.assertIn('return mesaBoundaryAudit && orbisfox::native_diagnostics_enabled();', source)
+        self.assertIn('lastGoodApi=currentApi', source)
         self.assertIn('lastGoodPhase=phase', source)
         self.assertIn('auditBins("SDK-copy",lock.site,"copy-after")', source)
         self.assertIn('auditBins("SDK-discard",lock.site,"discard-after")', source)
@@ -443,6 +458,28 @@ class GeckoAppTests(unittest.TestCase):
 
     def test_real_blob_font_platform_chooses_supported_freetype(self):
         subprocess.run(['python3', 'scripts/test-orbis-blob-font.py'], cwd=ROOT, check=True)
+
+    def test_custom_keyboard_chrome_assets_and_editor_boundary(self):
+        html = ET.parse(ROOT / 'gecko/orbisfox/fixtures/browser.xhtml')
+        elements = {element.get('id'): element for element in html.iter() if element.get('id')}
+        self.assertEqual(elements['keyboard-panel'].get('role'), 'dialog')
+        self.assertEqual(elements['keyboard-panel'].get('aria-modal'), 'true')
+        self.assertEqual(elements['keyboard-panel'].get('hidden'), 'hidden')
+        self.assertEqual(elements['keyboard-password'].get('type'), 'password')
+        self.assertEqual(elements['keyboard-draft'].get('maxlength'), '512')
+        ui = (ROOT / 'gecko/orbisfox/fixtures/browser-shell-ui.js').read_text()
+        host = (ROOT / 'gecko/orbisfox/fixtures/browser-shell-host.js').read_text()
+        self.assertNotIn('actions?.openTextKeyboard', ui)
+        self.assertIn("name==='forward')keyboardKey('Enter')", ui)
+        self.assertIn("keyboard.multiline){keyboardKey('New line')", ui)
+        self.assertIn('editor.insertText(insert)', host)
+        self.assertIn('editor.deleteSelection(Ci.nsIEditor.eNone,Ci.nsIEditor.eStrip)', host)
+        self.assertIn('host.sendEnter()', host)
+        self.assertIn('active.nav.document!==target.rootDocument', host)
+        self.assertIn('keyboardReleasePending&&host.buttons===0', host)
+        self.assertIn("'browser_keyboard_default': 'custom_chrome'", (ROOT / 'scripts/package-gecko.py').read_text())
+        interface = (ROOT / 'gecko/widget/orbis/nsIOrbisFoxHost.idl').read_text()
+        self.assertIn('void sendEnter();', interface)
 
     def test_native_ime_modal_release_gate_and_application_presentation_quiescence(self):
         gate = (ROOT / 'include/orbisfox/keyboard_launch.h').read_text()
@@ -874,7 +911,8 @@ class GeckoAppTests(unittest.TestCase):
         self.assertIn('#define _PR_ORBIS_STATIC_LINKER 1', header)
         self.assertNotIn('#define HAVE_DLL', header)
         self.assertNotIn('#define USE_DLFCN', header)
-        builder = (ROOT / 'scripts/build-gecko-app.py').read_text()
+        builder = (ROOT / 'scripts/gecko-link-inputs.py').read_text()
+        self.assertIn("LINK_INPUTS['collect_engine_inputs']", (ROOT / 'scripts/build-gecko-app.py').read_text())
         for target in ('pk11wrap_pk11wrap_static', 'softoken_softokn_static', 'freebl_freebl_static'):
             self.assertIn(target, builder)
         self.assertIn('Static NSS closure still contains its desktop freebl DLL loader', builder)

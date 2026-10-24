@@ -70,13 +70,14 @@
     <h2>Analog-stick cursor speed</h2><label for="cursor-speed">Speed <span id="cursor-speed-label">1×</span></label>
     <div id="cursor-speed-shell" class="range-shell"><div class="range-visual" aria-hidden="true"><span class="range-fill"></span><span class="range-knob"></span></div><input id="cursor-speed" data-control="cursor-speed" type="range" min="25" max="300" step="25" value="100" aria-label="Cursor speed"/></div>
     <h2>Website appearance</h2><p>Tell websites which color scheme to use. This does not change OrbisFox’s appearance; websites may ignore the preference.</p><div class="engine-options" role="group" aria-label="Website color scheme"><button id="color-system" data-control="color-system" data-command="color-system" aria-pressed="true">System</button><button id="color-light" data-control="color-light" data-command="color-light" aria-pressed="false">Light</button><button id="color-dark" data-control="color-dark" data-command="color-dark" aria-pressed="false">Dark</button></div>
+    <div class="diagnostics-row"><button id="reduced-motion" role="switch" aria-checked="false" data-control="reduced-motion" data-command="reduced-motion">Reduced motion: Off</button></div><p class="settings-note">Ask websites to reduce animations. Off by default; websites may ignore this preference or require a reload.</p>
     <h2>Default page zoom</h2><label for="default-zoom">Zoom <span id="default-zoom-label">100%</span></label><div id="default-zoom-shell" class="range-shell"><div class="range-visual" aria-hidden="true"><span class="range-fill"></span><span class="range-knob"></span></div><input id="default-zoom" data-control="default-zoom" type="range" min="50" max="200" step="10" value="100" aria-label="Default page zoom"/></div>
     <h2>Privacy</h2><div class="diagnostics-row"><button id="gpc-toggle" role="switch" aria-checked="false" data-control="gpc-toggle" data-command="gpc-toggle">Tell websites not to sell or share my data: Off</button></div><div class="diagnostics-row"><button id="clear-site-data" data-control="clear-site-data" data-command="clear-site-data">Clear cookies and site data…</button></div><p class="settings-note">Global Privacy Control sends a standard opt-out signal; websites decide whether to honour it. Clearing removes cookies, site storage and cached files for every website and signs you out. Pages that are loading or playing stop and may need a reload. History and bookmarks are kept.</p>
     <h2>Diagnostics</h2><div class="diagnostics-row"><button id="diagnostics-toggle" role="switch" aria-checked="false" data-control="diagnostics-toggle" data-command="diagnostics-toggle">Save diagnostic logs: Off</button><button id="diagnostics-clear" data-control="diagnostics-clear" data-command="diagnostics-clear">Clear saved logs</button></div>
     <p class="settings-note">Off by default. Logs may contain visited addresses. Clearing logs turns diagnostics off and removes only OrbisFox diagnostic files; your profile, history and bookmarks are kept.</p>
     </div>
     <div id="settings-controls" role="tabpanel" aria-labelledby="settings-controls-tab" hidden="hidden"><h2>Controller guide</h2><p class="settings-note">Current bindings. Button remapping is planned for a later release.</p>
-      <dl class="controls-guide"><dt>Left stick / touchpad</dt><dd>Move pointer</dd><dt>Right stick</dt><dd>Scroll page</dd><dt>Cross</dt><dd>Click / activate selected control</dd><dt>Circle</dt><dd>Close overlay or send Escape</dd><dt>Square</dt><dd>Edit address / search</dd><dt>Triangle</dt><dd>Reload / stop loading</dd><dt>Options</dt><dd>Open menu / leave fullscreen</dd><dt>L1 / R1</dt><dd>Previous / next tab</dd><dt>L2 / R2</dt><dd>Back / forward</dd><dt>L3</dt><dd>Find in page</dd><dt>R3</dt><dd>Middle click; link to background tab, tab to close</dd><dt>D-pad</dt><dd>Navigate chrome controls and menu</dd><dt>Options + Circle</dt><dd>Exit OrbisFox</dd></dl>
+      <dl class="controls-guide"><dt>Left stick / touchpad</dt><dd>Move pointer</dd><dt>Right stick</dt><dd>Scroll page</dd><dt>Cross</dt><dd>Click / activate selected control</dd><dt>Circle</dt><dd>Close overlay or send Escape</dd><dt>Square</dt><dd>Edit address / search; delete while typing (hold to repeat)</dd><dt>Triangle</dt><dd>Reload / stop loading; space while typing</dd><dt>Options</dt><dd>Open menu / leave fullscreen</dd><dt>L1 / R1</dt><dd>Previous / next tab; move caret while typing</dd><dt>L2 / R2</dt><dd>Back / forward; R2 is Enter while typing</dd><dt>L3</dt><dd>Find in page</dd><dt>R3</dt><dd>Middle click; link to background tab, tab to close</dd><dt>D-pad</dt><dd>Navigate chrome controls, menu and keyboard keys</dd><dt>Options + Circle</dt><dd>Exit OrbisFox</dd></dl>
     </div>
     <p id="settings-status" role="status">Changes are saved automatically.</p><button data-control="settings-close" data-command="page">Back to browser</button>
   </section>
@@ -87,6 +88,16 @@
   <section id="diagnostic-panel" hidden="hidden" aria-label="Diagnostics">
     <h2>Native network / certificate validation</h2><pre id="diagnostic-text">Not started</pre>
     <button data-control="diagnostic-close" data-command="dismiss-diagnostics">Close</button>
+  </section>
+  <section id="keyboard-panel" role="dialog" aria-modal="true" aria-labelledby="keyboard-title" aria-describedby="keyboard-note" hidden="hidden">
+    <div id="keyboard-card">
+      <h2 id="keyboard-title">Address / search</h2>
+      <textarea id="keyboard-draft" class="keyboard-input" rows="2" maxlength="512" spellcheck="false" autocomplete="off" aria-label="Text to edit"></textarea>
+      <input id="keyboard-password" class="keyboard-input" type="password" maxlength="512" autocomplete="off" aria-label="Password to edit" hidden="hidden"/>
+      <div id="keyboard-keys" role="group" aria-label="On-screen keys"></div>
+      <p id="keyboard-note"></p>
+      <p class="keyboard-help">D-pad: choose key · Cross: type · Triangle: space · Square: delete (hold to repeat) · L1 / R1: move caret · R2: Enter · Circle: close</p>
+    </div>
   </section>
   <script src="chrome://orbisfox/content/browser-shell-ui.js"></script>
 </body>

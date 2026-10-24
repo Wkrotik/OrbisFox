@@ -3,8 +3,9 @@
 #include <stdint.h>
 #include <sys/stat.h>
 namespace orbisfox {
-// FreeBSD 9-derived PS4 kernel record, distinct from the SDK's musl-facing
-// record. Keep translation explicit; never pass the SDK record to firmware.
+// FreeBSD 9-derived PS4 kernel record. Only the old musl-facing SDK requires
+// explicit translation; the native BSD SDK must match the audited layout and
+// imports its own stat/lstat/fstat without application libc interposition.
 struct FirmwareStat {
     uint32_t device, inode;
     uint16_t mode, links;

@@ -21,6 +21,7 @@ The following exceptions take precedence over the root license:
 | `gecko/third_party/angle/src/common/system_utils_orbis.cpp` | ANGLE BSD-3-Clause; `ANGLE-BSD-3-Clause.txt`. |
 | `scripts/patch-gecko.py`, `scripts/patch-gecko-layout.py` | MPL-2.0; these contain modifications/excerpts of Mozilla source. |
 | `scripts/build-libcxx.py` | Apache-2.0 WITH LLVM-exception; includes LLVM source modifications. |
+| `scripts/build-homebrew-sdk-probe.py` | GPL-3.0-or-later; uses the project's GPL packaging verification helpers. The separate SDK's own startup/runtime licenses also apply to its probe binary. |
 | `scripts/ps4.ld`, `scripts/ps4-gecko.ld` | GPL-3.0-only; adapted from OpenOrbis's GPL-v3 linker script. |
 | `src/ps4/piglet.cpp`, `src/ps4/videoout.cpp`, `scripts/package.py` | Retained under GPL-3.0-or-later conservatively because of the documented OpenOrbis sample adaptations. Do not claim these were relicensed to MIT. |
 | `assets/licenses/**`, `LICENSES/**` | Each upstream license/notice retains its own terms. |

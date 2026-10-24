@@ -2,9 +2,9 @@
 XPCOM_MANIFESTS += ["components.conf"]
 XPIDL_SOURCES += ["nsIOrbisFoxHost.idl"]
 XPIDL_MODULE = "widget_orbis"
-EXPORTS.mozilla.widget += ["OrbisCompositorWidget.h", "OrbisFoxHost.h", "OrbisGfxInfo.h", "OrbisTaskDiagnostics.h"]
+EXPORTS.mozilla.widget += ["OrbisCompositorWidget.h", "OrbisFoxHost.h", "OrbisGfxInfo.h", "OrbisResourceDiagnostics.h", "OrbisTaskDiagnostics.h"]
 SOURCES += ["MediaKeysEventSourceFactory.cpp", "nsAppShell.cpp", "nsWidgetFactory.cpp",
-            "OrbisCompositorWidget.cpp", "OrbisFoxHost.cpp", "OrbisTaskDiagnostics.cpp"]
+            "OrbisCompositorWidget.cpp", "OrbisFoxHost.cpp", "OrbisResourceDiagnostics.cpp", "OrbisTaskDiagnostics.cpp"]
 SOURCE_HEADERS += ["nsAppShell.h", "nsLookAndFeel.h", "nsWidgetFactory.h"]
 LOCAL_INCLUDES += ["!/ipc/ipdl/_ipdlheaders", "/ipc/chromium/src",
                    "/third_party/abseil-cpp", "/widget", "/widget/headless"]

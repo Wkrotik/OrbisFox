@@ -1,6 +1,13 @@
 // Initial Rust standard-library gate, not JavaScript/Gecko integration.
 use std::mem::{align_of, size_of, offset_of};
 
+#[cfg(target_vendor = "scei")]
+const _: () = {
+    assert!(size_of::<libc::wchar_t>() == 2);
+    assert!(libc::CLOCK_THREAD_CPUTIME_ID == 14);
+    assert!(libc::CLOCK_PROCESS_CPUTIME_ID == 15);
+};
+
 #[no_mangle]
 pub static ORBISFOX_RUST_ABI: [u64; 32] = [size_of::<libc::mode_t>() as u64,
          size_of::<libc::pthread_attr_t>() as u64, align_of::<libc::pthread_attr_t>() as u64,
@@ -18,6 +25,27 @@ pub static ORBISFOX_RUST_ABI: [u64; 32] = [size_of::<libc::mode_t>() as u64,
          size_of::<libc::dirent>() as u64, offset_of!(libc::dirent, d_name) as u64,
          libc::EAGAIN as u64, libc::MAP_ANON as u64, libc::CLOCK_MONOTONIC as u64,
          libc::O_CREAT as u64, libc::O_CLOEXEC as u64, libc::AF_INET6 as u64];
+
+// Linked native-SDK validation fixture, not evidence of console execution.
+#[cfg(target_vendor = "scei")]
+#[no_mangle]
+pub extern "C" fn orbisfox_rust_native_threads_probe() -> u32 {
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
+    let pair = Arc::new((Mutex::new(false), Condvar::new()));
+    let child_pair = Arc::clone(&pair);
+    let child = std::thread::Builder::new().name("OrbisFox Rust ABI".into()).spawn(move || {
+        let (lock, changed) = &*child_pair;
+        *lock.lock().unwrap() = true;
+        changed.notify_one();
+    });
+    let Ok(child) = child else { return 0 };
+    let (lock, changed) = &*pair;
+    let (ready, _) = changed.wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |ready| !*ready).unwrap();
+    let success = *ready;
+    drop(ready);
+    if child.join().is_ok() && success { 1 } else { 0 }
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn orbisfox_rust_check_abi(values: *const u64, count: usize) -> u32 {

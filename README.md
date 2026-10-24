@@ -6,6 +6,17 @@ OrbisFox runs real Gecko HTML/CSS layout, SpiderMonkey JavaScript, NSS networkin
 Software WebRender and software audio/video decoding on PS4. It is not a wrapper
 around the system browser, a remote-rendering client or a reskinned diagnostic UI.
 
+## Development branch
+
+`dev` is an experimental development branch, not a release or stability promise.
+It retains the default-off [Mesa/WebRender experiment](docs/MESA_WEBRENDER.md),
+its diagnostic tools and host tests. The latest Mesa console candidate still
+crashes during startup; a passing host suite or native link does not establish
+console stability. The [native SDK conversion](docs/HOMEBREW_SDK.md) is in progress
+in this branch, with isolated runtimes and a separate SWGL application-link lane;
+it is not yet a working native-SDK browser installer or a proven Mesa fix.
+Use `main` and the published releases for the existing software-rendered baseline.
+
 ## Project status
 
 OrbisFox is an **early alpha for developers and testers**, not a polished or
@@ -23,7 +34,7 @@ tracking individual release results.
 
 - Native 1280×720 browser with up to **three nonremote tabs**.
 - Real Gecko layout and JavaScript interpretation; HTTP/HTTPS through Gecko/NSS.
-- Controller pointer/scrolling, native PS4 IME, navigation, zoom and find-in-page.
+- Controller pointer/scrolling, custom chrome keyboard, navigation, zoom and find-in-page; native PS4 IME backend retained for later repair.
 - Bookmarks, application history, recent sites and settings persisted in the profile.
 - Firefox-style address bar: plausible hosts navigate (localhost/IP literals over
   HTTP), everything else searches; `@ddg`, `@wiki` and other one-off search keywords.
@@ -109,15 +120,24 @@ an app is not a firmware modification, and this project provides no jailbreak.
 | Right stick | Scroll |
 | Cross | Click / activate |
 | Circle | Close overlay or send Escape |
-| Square | Address / search entry via native IME |
-| Triangle | Reload / stop |
+| Square | Open custom keyboard; delete while typing (hold to repeat) |
+| Triangle | Reload / stop; space while typing |
 | Options | Menu / leave fullscreen |
-| L1 / R1 | Previous / next tab |
-| L2 / R2 | Back / forward |
+| L1 / R1 | Previous / next tab; move caret while typing |
+| L2 / R2 | Back / forward; **R2 is Enter while typing** |
 | L3 | Find in page |
 | R3 | Middle click; link to background tab, tab to close |
-| D-pad | Navigate browser controls/menu |
+| D-pad | Navigate browser controls/menu/keyboard keys |
 | Options + Circle | Exit OrbisFox |
+
+The SDK dev browser uses a custom chrome keyboard for address/search, Find and
+standard text inputs/textareas. R2 submits chrome drafts or sends Enter to a
+single-line page field; in a textarea it inserts a newline. Done closes page
+entry without submitting. Circle discards chrome drafts, but cannot undo live
+page edits. Password drafts are masked and cleared on close. Sony's backend is
+retained for later repair; suggestions and a Settings selector are deferred.
+The keyboard runs on Gecko's main thread and can still stall during long tasks.
+This work belongs to the dev checkout, not the protected working `main` tree.
 
 Settings includes the full Controls guide. Profile data lives under
 `/data/orbisfox/`. Diagnostics are **off by default**; enable only for a controlled

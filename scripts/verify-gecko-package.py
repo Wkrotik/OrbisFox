@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Extract and audit the isolated offline Gecko package; no console claims."""
+import argparse
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+import runpy
 import shutil
 import struct
 import subprocess
 import zipfile
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / 'build/gecko-app'
@@ -67,16 +69,38 @@ def read_sfo(data):
     return result
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--sdk', choices=('openorbis', 'homebrew'), default='openorbis')
+    args = parser.parse_args(argv)
+    identities = runpy.run_path(str(ROOT / 'scripts/gecko-package-identity.py'))
+    build_dir, dist_dir = identities['package_directories'](args.sdk)
+    BUILD, DIST = ROOT / build_dir, ROOT / dist_dir
     stage = BUILD / 'pkg'
-    package = ROOT / 'dist/gecko/OrbisFox.pkg'
-    expected = json.loads((ROOT / 'dist/gecko/build-report.json').read_text())
+    expected = json.loads((DIST / 'build-report.json').read_text())
+    if expected.get('sdk', 'openorbis') != args.sdk:
+        raise ValueError('Verifier SDK does not match package report')
+    identity = identities['report_identity'](expected)
+    package = DIST / identity['package_name']
+    native = None
+    if args.sdk == 'homebrew':
+        producer = runpy.run_path(str(ROOT / 'scripts/package-gecko.py'))
+        app_report = BUILD / 'build-report.json'
+        if digest(app_report) != expected['native_application_report_sha256']:
+            raise ValueError('Native application report differs from packaged build')
+        app = json.loads(app_report.read_text())
+        native = producer['validate_application'](app, BUILD, args.sdk)
+        if (expected['sdk_identity'] != native['identity'] or expected['self_authinfo'] != native['authinfo']
+                or expected['native_executable'] != app['executable']):
+            raise ValueError('Native package SDK/authentication/executable binding changed')
     if digest(package) != expected['sha256']:
         raise ValueError('Package differs from its build report')
     sdk = Path(os.environ.get('OO_PS4_TOOLCHAIN', ROOT / '.deps/OpenOrbis/PS4Toolchain')).resolve()
     tool = sdk / 'bin/linux/PkgTool.Core'
     env = dict(os.environ, DOTNET_SYSTEM_GLOBALIZATION_INVARIANT='1')
     extracted = BUILD / 'extracted'
+    if extracted.is_symlink():
+        raise ValueError('Package extraction directory must not be a symlink')
     if extracted.exists(): shutil.rmtree(extracted)
     with (BUILD / 'extraction.log').open('w') as log:
         subprocess.run([str(tool), 'pkg_extract', '--passcode', '0' * 32,
@@ -123,21 +147,26 @@ def main():
     for name, value in staged_sfo.items():
         if actual_sfo.get(name) != value:
             raise ValueError('Extracted SFO mismatch: ' + name)
-    if set(actual_sfo) - set(staged_sfo) != {'PUBTOOLINFO', 'PUBTOOLVER'}:
+    additional_sfo_keys = set(actual_sfo) - set(staged_sfo)
+    allowed = {'PUBTOOLINFO', 'PUBTOOLVER'}
+    if (additional_sfo_keys - allowed or (not native and additional_sfo_keys != allowed)):
         raise ValueError('Unexpected generated SFO metadata')
-    required = {'TITLE': b'OrbisFox\0', 'TITLE_ID': b'ORBF00001\0',
+    required = {'TITLE': (identity['title']+'\0').encode(), 'TITLE_ID': (identity['title_id']+'\0').encode(),
                 'APP_VER': b'0.68\0', 'VERSION': b'0.68\0', 'CATEGORY': b'gd\0',
-                'CONTENT_ID': b'IV0000-ORBF00001_00-ORBISFOXPROBE000\0'}
+                'CONTENT_ID': (identity['content_id']+'\0').encode()}
     for name, value in required.items():
         if actual_sfo.get(name) != (0x204, value):
             raise ValueError('Unexpected package identity/version: ' + name)
     if actual_sfo.get('ATTRIBUTE') != (0x404, struct.pack('<I', 0x20)):
         raise ValueError('Common dialog must follow real system enter-button assignment')
-    report = {'common_dialog_enter_button_assignment_system_verified': True, 'package_sha256': digest(package), 'verified_payload_files': len(verified),
+    packaging = runpy.run_path(str(ROOT / 'scripts/package.py'))
+    authinfo = native['authinfo'] if native else packaging['AUTHINFO']
+    self_metadata = packaging['verify_self'](payload / 'eboot.bin', authinfo, 0x3800000000000035)
+    report = {'self_authentication_metadata_verified': self_metadata, 'common_dialog_enter_button_assignment_system_verified': True, 'package_sha256': digest(package), 'verified_payload_files': len(verified),
               'all_non_generated_staged_files_match_extracted_package': True,
               'archived_resource_entries_hash_verified': archive_entries,
               'generated_sfo_identity_version_and_source_fields_verified': True,
-              'generated_sfo_additional_keys': ['PUBTOOLINFO', 'PUBTOOLVER'],
+              'generated_sfo_additional_keys': sorted(additional_sfo_keys),
               'html_rendered_on_console': False, 'hardware_tested': False, 'files': verified}
     (BUILD / 'extracted-payload-report.json').write_text(json.dumps(report, indent=2) + '\n')
     expected['extracted_payload_verified'] = True
@@ -146,7 +175,7 @@ def main():
     expected['extracted_resource_archive_entries_verified'] = archive_entries
     expected['extracted_generated_greprefs_matches_engine_output'] = True
     expected['generated_greprefs_sha256'] = digest(generated_prefs)
-    (ROOT / 'dist/gecko/build-report.json').write_text(json.dumps(expected, indent=2) + '\n')
+    (DIST / 'build-report.json').write_text(json.dumps(expected, indent=2) + '\n')
     print(f'Extracted package: {len(verified)} files hash-verified; SFO identity/version verified.')
     return 0
 

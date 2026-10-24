@@ -11,6 +11,12 @@
 #undef EVENT__HAVE_ARC4RANDOM
 #undef EVENT__HAVE_ARC4RANDOM_ADDRANDOM
 #undef EVENT__HAVE_ARC4RANDOM_BUF
+#ifdef ORBISFOX_HOMEBREW_SDK
+// BSD 9 exposes pipe(), not pipe2(). Retain libevent's checked pipe/fcntl path.
+#undef EVENT__HAVE_PIPE2
+// Keep upstream's TCP/UDP protocol names and unknown-protocol failure path.
+#undef EVENT__HAVE_GETPROTOBYNUMBER
+#endif
 #undef EVENT__HAVE_GETRANDOM
 #undef EVENT__HAVE_SYS_RANDOM_H
 #undef EVENT__HAVE_SYSCTL

@@ -71,8 +71,9 @@ def fetch_runs(ftp, version, out):
         if parsed.get('run_id')!=run:raise ValueError('Run directory/metadata mismatch: '+run)
         if parsed.get('version')!=version:continue
         for name in names(ftp,remote):
-            if name in LOGS or name in {'run-meta.json','heap-diagnostics.bin'} or re.fullmatch(r'gecko-load\.log(?:[._-][A-Za-z0-9._-]+)?',name):
-                record=retrieve(ftp,remote+'/'+name,out/'runs'/run/name)
+            if name in LOGS or name in {'run-meta.json','heap-diagnostics.bin','allocator-flight.bin'} or re.fullmatch(r'gecko-load\.log(?:[._-][A-Za-z0-9._-]+)?',name):
+                record=retrieve(ftp,remote+'/'+name,out/'runs'/run/name,
+                                limit=64+1048576*64 if name=='allocator-flight.bin' else 128*1024*1024)
                 record['run_id']=run;record['native_version']=parsed['version'];records.append(record)
     return records
 

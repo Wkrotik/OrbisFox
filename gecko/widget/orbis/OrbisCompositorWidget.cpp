@@ -1,4 +1,4 @@
-/* OrbisFox software compositor surface. Licensed under MPL-2.0. */
+/* OrbisFox compositor mailbox. Licensed under MPL-2.0. */
 #include "OrbisCompositorWidget.h"
 #include "mozilla/Assertions.h"
 
@@ -81,6 +81,31 @@ void OrbisCompositorWidget::DiscardFrames() {
   frame->surface = nullptr;
   frame->owner = nullptr;
   ++frame->sequence;
+}
+
+bool OrbisCompositorWidget::PublishGpuFrame(
+    const CompositorWidget* aOwner, already_AddRefed<DataSourceSurface> aSurface) {
+  RefPtr<DataSourceSurface> surface = aSurface;
+  if (!aOwner || !surface || surface->GetFormat() != SurfaceFormat::B8G8R8A8) {
+    return false;
+  }
+  const IntSize size = surface->GetSize();
+  if (size.width <= 0 || size.height <= 0 || size.width > 1280 ||
+      size.height > 720 || !Factory::AllowedSurfaceSize(size)) return false;
+  auto frame = Frames().Lock();
+  frame->surface = std::move(surface);
+  frame->owner = aOwner;
+  ++frame->sequence;
+  return true;
+}
+
+void OrbisCompositorWidget::DiscardGpuFrame(const CompositorWidget* aOwner) {
+  auto frame = Frames().Lock();
+  if (frame->owner == aOwner) {
+    frame->surface = nullptr;
+    frame->owner = nullptr;
+    ++frame->sequence;
+  }
 }
 
 already_AddRefed<DataSourceSurface> OrbisCompositorWidget::GetLatestFrame(

@@ -2,8 +2,8 @@
 """Preserve and upload the verified current Gecko candidate; never install/launch.
 Example: python3 scripts/deploy-console.py
 Uses upload-pkgs.py's hidden upload + full remote SHA-256 check. Records existing
-capture ownership; --capture opts into a bounded reader. Default stops only
-verified owned readers and never opens a diagnostics connection. The local frozen fixture is verified too. An idle reader is not
+capture ownership; --capture opts into a bounded reader and verified local
+fixture. Default upload starts/stops neither process and opens no diagnostics connection. An idle reader is not
 claimed fresh and does not prevent a package upload. Use fetch-console-crash.py
 for crash evidence retrieval; do not relaunch before collecting that evidence.
 """
@@ -23,9 +23,12 @@ import signal
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
-MARKERS = ('heap-debug', 'probe-jit', 'verbose-gecko-log', 'diagnostic-only', 'probe-sdk-semaphore')
+MARKERS = ('heap-debug', 'probe-jit', 'verbose-gecko-log', 'diagnostic-only', 'probe-sdk-semaphore',
+           'diagnostics.enabled')
 UPLOADER = runpy.run_path(str(Path(__file__).with_name('upload-pkgs.py')))
-REGISTERED_INSTALLERS = {*UPLOADER['PACKAGE_NAMES'], UPLOADER['LEGACY_MAIN_PACKAGE'], '.OrbisFox.pkg.uploading'}
+IDENTITY = runpy.run_path(str(Path(__file__).with_name('gecko-package-identity.py')))
+REGISTERED_INSTALLERS = {*UPLOADER['PACKAGE_NAMES'], UPLOADER['LEGACY_MAIN_PACKAGE'],
+                         *('.'+name+'.uploading' for name in UPLOADER['PACKAGE_NAMES'])}
 
 
 def sha256(path):
@@ -44,7 +47,11 @@ def preserve(source, destination):
         raise IOError(f'Preserved evidence hash mismatch: {destination}')
 
 
-def candidate():
+def candidate(sdk='openorbis'):
+    if sdk == 'homebrew':
+        return UPLOADER['homebrew_browser_candidate'](ROOT)
+    if sdk != 'openorbis':
+        raise ValueError('Unknown deployment SDK')
     package = json.loads((ROOT / 'dist/gecko/build-report.json').read_text())
     native = json.loads((ROOT / 'build/gecko-app/build-report.json').read_text())
     version = package['version']
@@ -53,7 +60,10 @@ def candidate():
     if not (package.get('new_package_created') and package.get('extracted_payload_verified')
             and native.get('final_engine_application_linked') and native.get('baseline_unchanged')):
         raise ValueError('Candidate verification incomplete; refusing upload')
-    pkg = ROOT / 'dist/gecko/OrbisFox.pkg'
+    identity = IDENTITY['report_identity'](package)
+    if bool(native.get('experimental_native_mesa')) != package.get('experimental_mesa', False):
+        raise ValueError('Package/native experimental flavor mismatch')
+    pkg = ROOT / 'dist/gecko' / identity['package_name']
     elf = ROOT / 'build/gecko-app/orbisfox.elf'
     if pkg.stat().st_size != package['bytes'] or sha256(pkg) != package['sha256']:
         raise ValueError('Package bytes/hash do not match verification report')
@@ -198,23 +208,69 @@ def main():
     parser.add_argument('--host', required=True, help='Explicit console address; no maintainer default')
     parser.add_argument('--port', type=int, default=2121)
     parser.add_argument('--deadline', type=int, default=110)
+    parser.add_argument('--sdk', choices=('openorbis', 'homebrew'), default='openorbis',
+                        help='Upload the fixed native SDK browser instead of the legacy candidate')
+    parser.add_argument('--homebrew-sdk-probe', action='store_true',
+                        help='Upload only OSDK00001; never capture/install/launch')
+    parser.add_argument('--shared-memory-probe', action='store_true',
+                        help='Upload the verified separate SHMP00001 diagnostic; never capture/install/launch')
     parser.add_argument('--capture', action='store_true', help='Explicit opt-in kernel diagnostics; off by default')
     args = parser.parse_args()
     if not 1 <= args.deadline <= 110:
         parser.error('Upload deadline must be 1..110 seconds')
-    version, package, native = candidate()
-    out = ROOT / f'build/hardware-{version}'
+    if args.sdk == 'homebrew' and (args.capture or args.homebrew_sdk_probe or args.shared_memory_probe):
+        parser.error('--sdk homebrew is browser upload-only; no probe or capture choices')
+    if args.homebrew_sdk_probe:
+        if args.capture or args.shared_memory_probe:
+            parser.error('--homebrew-sdk-probe is upload-only and cannot combine probe/capture choices')
+        package_report, native = UPLOADER['homebrew_sdk_probe_candidate'](ROOT)
+        native_report = package_report
+        package = native['package']
+        version, suffix = native.get('app_version', '00.01'), '-sdk'
+        identity = {'package_name': UPLOADER['HOMEBREW_SDK_PROBE_PACKAGE']}
+        pkg = ROOT / native['package_path']
+        elf = package_report.parent / 'runtime.elf'
+        upload_choice = '--homebrew-sdk-probe'
+    elif args.shared_memory_probe:
+        if args.capture:
+            parser.error('--shared-memory-probe is upload-only and cannot enable capture')
+        native = UPLOADER['shared_memory_probe_candidate'](ROOT)
+        package = native['package']
+        version, suffix = '00.01', '-shmem'
+        identity = {'package_name': UPLOADER['SHARED_MEMORY_PROBE_PACKAGE']}
+        pkg, elf = ROOT / package['file'], ROOT / native['elf']['file']
+        package_report = native_report = ROOT / 'build/shared-memory-probe/build-report.json'
+        upload_choice = '--shared-memory-probe'
+    else:
+        version, package, native = candidate(args.sdk)
+        identity = IDENTITY['report_identity'](package)
+        suffix = '-homebrew' if args.sdk == 'homebrew' else '-mesa' if package.get('experimental_mesa') else ''
+        build_dir, dist_dir = IDENTITY['package_directories'](args.sdk)
+        pkg = ROOT / dist_dir / identity['package_name']
+        elf = ROOT / build_dir / 'orbisfox.elf'
+        package_report, native_report = ROOT / dist_dir / 'build-report.json', ROOT / build_dir / 'build-report.json'
+        upload_choice = '--gecko'
+    out = ROOT / f'build/hardware-{version}{suffix}'
     attempt = out / 'deployments' / str(time.time_ns())
     attempt.mkdir(parents=True)
     report = {'version': version, 'host': args.host, 'port': args.port,
               'uploaded': False, 'installed': False, 'launched': False,
-              'console_settings_changed': False, 'sha256': package['sha256'], 'bytes': package['bytes'], 'errors': []}
+              'console_settings_changed': False, 'sha256': package['sha256'], 'bytes': package['bytes'], 'errors': [],
+              'remote_path': '/data/pkg/' + identity['package_name']}
     try:
-        for source, name in [(ROOT / 'dist/gecko/OrbisFox.pkg', 'OrbisFox.pkg'),
-                             (ROOT / 'build/gecko-app/orbisfox.elf', 'orbisfox.elf')]:
-            preserve(source, out / name)
-        for source, name in [(ROOT / 'dist/gecko/build-report.json', 'package-report.json'),
-                             (ROOT / 'build/gecko-app/build-report.json', 'native-build-report.json')]:
+        report['artifacts'] = {}
+        for source, name in [(pkg, identity['package_name']),
+                             (elf, 'sdk-probe.elf' if args.homebrew_sdk_probe else
+                              'shared-memory-probe.elf' if args.shared_memory_probe else 'orbisfox.elf')]:
+            destination = attempt / name
+            preserve(source, destination)
+            report['artifacts'][name] = {'path': str(destination), 'sha256': sha256(destination)}
+            # Historical version-root copies are immutable crash pivots, not a
+            # current-candidate cache. Every attempt owns its actual matched pair.
+            if not (out / name).exists():
+                preserve(source, out / name)
+        for source, name in [(package_report, 'package-report.json'),
+                             (native_report, 'native-build-report.json')]:
             preserve(source, attempt / name)
         manifest = []
         for directory in ('gecko', 'src', 'include', 'scripts', 'tests'):
@@ -229,10 +285,13 @@ def main():
             manifest.append({'path': name, 'sha256': sha256(ROOT / name)})
         (attempt / 'source-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
         before = console_state(args.host, args.port)
-        capture = prepare_capture(args.host, version, out, collect_logs=args.capture)
+        capture = (prepare_capture(args.host, version, out, collect_logs=True) if args.capture else
+                   {'active': False, 'diagnostics_requested': False, 'new_reader': False,
+                    'fixture_server_bytes_verified': False, 'note': 'Upload only: no capture or fixture process started.'})
         with (attempt / 'upload.log').open('w') as stream:
             result = subprocess.run([sys.executable, str(ROOT / 'scripts/upload-pkgs.py'),
-                                     '--host', args.host, '--port', str(args.port), '--gecko'],
+                                     '--host', args.host, '--port', str(args.port), upload_choice,
+                                     '--sdk', args.sdk],
                                     cwd=ROOT, stdout=stream, stderr=subprocess.STDOUT, timeout=args.deadline)
         if result.returncode:
             raise RuntimeError(f'Uploader failed: exit {result.returncode}; see {attempt / "upload.log"}')
@@ -240,6 +299,8 @@ def main():
         report['uploader_full_remote_SHA256_verified'] = True
         after = console_state(args.host, args.port)
         unrelated = set(before['installers']) - REGISTERED_INSTALLERS
+        if args.sdk == 'homebrew' or package.get('experimental_mesa') or args.shared_memory_probe or args.homebrew_sdk_probe:
+            unrelated = set(before['installers']) - {identity['package_name'], '.'+identity['package_name']+'.uploading'}
         if not unrelated.issubset(after['installers']) or before['markers'] != after['markers']:
             raise RuntimeError('Unrelated installers or diagnostic markers changed during deployment')
         report.update(unrelated_installers_preserved=True, markers_verified=after['markers'])

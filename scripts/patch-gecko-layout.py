@@ -28,6 +28,95 @@ def freetype_guards(text):
                   text, flags=re.MULTILINE)
 
 
+def patch_portable_baseline_marker(root):
+    name = 'js/src/vm/PortableBaselineInterpret.cpp'
+    replace_once(root, name, '#include "vm/PortableBaselineInterpret.h"',
+                 '#include "vm/PortableBaselineInterpret.h"\n'
+                 '#ifdef MOZ_ORBIS_HOMEBREW_SDK\n#include "mozilla/Atomics.h"\n#endif')
+    replace_once(root, name, 'using namespace js::jit;\n',
+                 'using namespace js::jit;\n\n#ifdef MOZ_ORBIS_HOMEBREW_SDK\n'
+                 '#include "../../../orbisfox/OrbisPortableBaseline.inc"\n#endif\n')
+    replace_once(root, name,
+                 '    StackVal* restartEntryFrame, PBIResult restartCode) {\n',
+                 '    StackVal* restartEntryFrame, PBIResult restartCode) {\n'
+                 '#ifdef MOZ_ORBIS_HOMEBREW_SDK\n'
+                 '  if (!sOrbisPortableBaselineEntered) sOrbisPortableBaselineEntered = true;\n'
+                 '#endif\n')
+
+
+def patch_native_link_gate_debug(root):
+    # The build already strips this validation DSO; avoid its multi-GB temporary.
+    replace_once(root, 'toolkit/library/build/moz.build', 'Libxul("xul-real")\n',
+                 'Libxul("xul-real")\n\n'
+                 'if CONFIG["MOZ_ORBIS_HOMEBREW_SDK"]:\n'
+                 '    LDFLAGS += ["-Wl,--strip-debug"]\n')
+
+
+def patch_native_worker_shutdown(root):
+    name = 'dom/workers/RuntimeService.cpp'
+    replace_once(root, name, '#include "nsISupportsPriority.h"',
+                 '#include "nsISupportsPriority.h"\n'
+                 '#ifdef MOZ_ORBIS_HOMEBREW_SDK\n#include "nsIThreadShutdown.h"\n#endif')
+    old = ('  if (thread->ShutdownRequired()) {\n'
+           '    MOZ_ALWAYS_SUCCEEDS(thread->Shutdown());\n'
+           '  }\n\n  return NS_OK;\n}\n\n}  // namespace workerinternals')
+    new = ('  if (thread->ShutdownRequired()) {\n'
+           '#ifdef MOZ_ORBIS_HOMEBREW_SDK\n'
+           '    // Keep the normal ACK/join and exit barrier without a nested main loop.\n'
+           '    nsCOMPtr<nsIThreadShutdown> shutdown;\n'
+           '    MOZ_ALWAYS_SUCCEEDS(thread->BeginShutdown(getter_AddRefs(shutdown)));\n'
+           '#else\n'
+           '    MOZ_ALWAYS_SUCCEEDS(thread->Shutdown());\n'
+           '#endif\n'
+           '  }\n\n  return NS_OK;\n}\n\n}  // namespace workerinternals')
+    replace_once(root, name, old, new)
+
+
+def patch_native_ipc_primitives(root):
+    replace_once(root, 'ipc/chromium/src/chrome/common/process_watcher_posix_sigchld.cc',
+                 '#if !defined(XP_DARWIN)\n'
+                 '// Linux, {Free,Net,Open}BSD, and Solaris; but not macOS, yet.\n'
+                 '#  define HAVE_PIPE2 1',
+                 '#if !defined(XP_DARWIN) && !defined(ORBISFOX_HOMEBREW_SDK)\n'
+                 '// Native BSD 9 uses the checked pipe/fcntl fallback below.\n'
+                 '// Linux, {Free,Net,Open}BSD, and Solaris; but not macOS, yet.\n'
+                 '#  define HAVE_PIPE2 1')
+    replace_once(root, 'ipc/glue/ProcessUtils_bsd.cpp',
+                 ('#if !defined(XP_NETBSD) && !defined(__ORBIS__)\n#  include <pthread_np.h>',
+                  '#if !defined(XP_NETBSD)\n#  include <pthread_np.h>'),
+                 '#if !defined(XP_NETBSD) && (!defined(__ORBIS__) || defined(ORBISFOX_HOMEBREW_SDK))\n'
+                 '#  include <pthread_np.h>')
+
+
+def patch_native_libevent_rng_names(root):
+    # Keep the existing embedded entropy/error path. Native BSD headers also
+    # declare arc4random APIs, so the embedded static helpers need private names.
+    name = 'ipc/chromium/src/third_party/libevent/evutil_rand.c'
+    anchor = '#else /* !EVENT__HAVE_ARC4RANDOM { */\n\n'
+    replace_once(root, name, anchor,
+                 anchor + '#ifdef ORBISFOX_HOMEBREW_SDK\n'
+                 '#include <stdlib.h>\n'
+                 '#define arc4random_addrandom orbis_libevent_arc4random_addrandom\n'
+                 '#define arc4random_buf orbis_libevent_arc4random_buf\n'
+                 '#endif\n\n')
+    tail = ('void\nevutil_free_secure_rng_globals_(void)\n{\n'
+            '    evutil_free_secure_rng_globals_locks();\n}\n')
+    replace_once(root, name, tail,
+                 tail + '\n#if defined(ORBISFOX_HOMEBREW_SDK) && !defined(EVENT__HAVE_ARC4RANDOM)\n'
+                 '/* Do not leak names into the following unified-build units. */\n'
+                 '#undef arc4random_addrandom\n#undef arc4random_buf\n#endif\n')
+
+
+def patch_orbis_webrender_freetype(root):
+    # This module consumes cairo-ft.h on Orbis too. Declare its FreeType
+    # dependency locally instead of depending on SDK-global font includes.
+    replace_once(root, 'gfx/webrender_bindings/moz.build',
+                 'if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("android", "gtk"):\n'
+                 '    CXXFLAGS += CONFIG["CAIRO_FT_CFLAGS"]',
+                 'if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("android", "gtk", "orbis"):\n'
+                 '    CXXFLAGS += CONFIG["CAIRO_FT_CFLAGS"]')
+
+
 def static_ffvpx_bindings(root):
     """Resolve real pinned codec functions, without invented PRLibrary handles."""
     base=root/'dom/media/platforms/ffmpeg'
@@ -64,8 +153,244 @@ def register_cubeb_source(root):
                  '      init_oneshot,\n#if defined(USE_ORBIS)\n      orbis_init,\n#endif\n')
 
 
+def patch_orbis_widget_mesa(root):
+    """Preserve hardware policy for the validated native headless mailbox."""
+    # This port deliberately uses headless widgets for its native mailbox. The
+    # generic widget selector otherwise forces SWGL even when gfxConfig permits
+    # hardware, so only a validated Orbis backend may consult the global choice.
+    replace_once(root, 'widget/nsIWidget.cpp', '#include "nsIWidget.h"',
+                 '#include "nsIWidget.h"\n#ifdef MOZ_ORBIS_MESA\n'
+                 '#include "mozilla/widget/OrbisGfxInfo.h"\n'
+                 '#include "mozilla/widget/OrbisResourceDiagnostics.h"\n#endif')
+    replace_once(root, 'widget/nsIWidget.cpp',
+                 '    if (!IsHeadlessWidget() &&\n'
+                 '        (supportsAcceleration ||',
+                 '    bool headlessNeedsSoftware = IsHeadlessWidget();\n'
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '    const bool nativeGpuReady = mozilla::widget::IsOrbisMesaGpuReady();\n'
+                 '    headlessNeedsSoftware = headlessNeedsSoftware && !nativeGpuReady;\n'
+                 '#endif\n'
+                 '    if (!headlessNeedsSoftware &&\n'
+                 '        (supportsAcceleration ||')
+    replace_once(root, 'widget/nsIWidget.cpp',
+                 '    bool enableAPZ = UseAPZ();',
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '    mozilla::widget::RecordOrbisCompositorSelection(\n'
+                 '        IsHeadlessWidget(), supportsAcceleration, nativeGpuReady,\n'
+                 '        gfx::gfxVars::UseSoftwareWebRender(), enableSWWR);\n'
+                 '#endif\n'
+                 '    bool enableAPZ = UseAPZ();')
+
+
+def patch_orbis_mesa(root):
+    """Opt-in static EGL + real offscreen WebRender, never a fake PRLibrary."""
+    # Permit this platform only after an owned GPU test. Preserve safe mode,
+    # explicit disables, blocklist decisions and runtime software fallback.
+    replace_once(root, 'gfx/thebes/gfxPlatform.cpp', '#include "gfxConfig.h"',
+                 '#include "gfxConfig.h"\n#ifdef MOZ_ORBIS_MESA\n'
+                 '#include "mozilla/widget/OrbisResourceDiagnostics.h"\n#endif')
+    replace_once(root, 'gfx/thebes/gfxPlatform.cpp',
+                 '  gfxVars::SetUseSoftwareWebRender(!hasHardware);',
+                 '  gfxVars::SetUseSoftwareWebRender(!hasHardware);\n'
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '  mozilla::widget::RecordOrbisGraphicsConfig(\n'
+                 '      gfxConfig::IsEnabled(Feature::HW_COMPOSITING), hasHardware,\n'
+                 '      static_cast<uint32_t>(gfxConfig::GetFeature(Feature::HW_COMPOSITING).GetValue()),\n'
+                 '      static_cast<uint32_t>(gfxConfig::GetFeature(Feature::WEBRENDER).GetValue()));\n'
+                 '#endif')
+    replace_once(root, 'gfx/thebes/gfxPlatform.cpp',
+                 '  if (feature.SetDefault(AccelerateLayersByDefault(), FeatureStatus::Blocked,',
+                 '  bool nativeGpuReady = false;\n'
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '  nativeGpuReady = mozilla::widget::IsOrbisMesaGpuReady();\n'
+                 '#endif\n'
+                 '  if (feature.SetDefault(AccelerateLayersByDefault() || nativeGpuReady, FeatureStatus::Blocked,')
+    replace_once(root, 'gfx/thebes/gfxPlatform.cpp',
+                 '  if (IsHeadless()) {\n    feature.ForceDisable(FeatureStatus::Blocked,\n'
+                 '                         "Acceleration blocked by headless mode",',
+                 '  if (IsHeadless() && !nativeGpuReady) {\n'
+                 '    feature.ForceDisable(FeatureStatus::Blocked,\n'
+                 '                         "Acceleration blocked by headless mode",')
+    replace_once(root, 'gfx/config/gfxConfigManager.cpp',
+                 '  MOZ_ASSERT(aFeatureState);\n\n  nsCString blockId;',
+                 '  MOZ_ASSERT(aFeatureState);\n\n'
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '  // No invented desktop gfxInfo: this native backend has its own\n'
+                 '  // actual GLES3 shader/readback capability gate. Never mask a\n'
+                 '  // present gfxInfo blocklist or qualify unrelated features.\n'
+                 '  if (!mGfxInfo && aFeature == nsIGfxInfo::FEATURE_WEBRENDER &&\n'
+                 '      mozilla::widget::IsOrbisMesaGpuReady()) {\n'
+                 '    return;\n'
+                 '  }\n'
+                 '#endif\n\n  nsCString blockId;')
+    mesa_response = str(Path(__file__).resolve().parent.parent / 'build/orbis-mesa/link-inputs.rsp')
+    replace_once(root, 'gfx/gl/moz.build', 'FINAL_LIBRARY = "xul"',
+                 'if CONFIG["MOZ_ORBIS_MESA"]:\n'
+                 '    OS_LIBS += ' + repr(['-Wl,@' + mesa_response]) + '\n\n'
+                 'FINAL_LIBRARY = "xul"')
+    replace_once(root, 'gfx/gl/GLLibraryEGL.cpp', '#include "GLLibraryEGL.h"',
+                 '#include "GLLibraryEGL.h"\n'
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 'extern "C" PRFuncPtr eglGetProcAddress(const char*);\n'
+                 'extern "C" bool orbis_mesa_gpu_ready() __attribute__((weak));\n'
+                 '#endif')
+    replace_once(root, 'gfx/gl/GLLibraryEGL.cpp',
+                 '  mozilla::ScopedGfxFeatureReporter reporter("EGL");\n\n#ifdef XP_WIN',
+                 '  mozilla::ScopedGfxFeatureReporter reporter("EGL");\n\n'
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '  // Real statically linked Mesa; no DSO handle or fake load success.\n'
+                 '  // Absent/failed native binding is an honest unavailable backend.\n'
+                 '  if (!orbis_mesa_gpu_ready || !orbis_mesa_gpu_ready()) {\n'
+                 '    return false;\n'
+                 '  }\n'
+                 '#elif defined(XP_WIN)')
+    replace_once(root, 'gfx/gl/GLLibraryEGL.cpp',
+                 '  if (!mEGLLibrary || !mGLLibrary) {',
+                 '#ifndef MOZ_ORBIS_MESA\n  if (!mEGLLibrary || !mGLLibrary) {')
+    replace_once(root, 'gfx/gl/GLLibraryEGL.cpp',
+                 '#define SYMBOL(X)', '#endif  // !MOZ_ORBIS_MESA\n\n#define SYMBOL(X)')
+    replace_once(root, 'gfx/gl/GLLibraryEGL.cpp',
+                 '    const SymbolLoader libLoader(*mEGLLibrary);',
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '    const SymbolLoader libLoader(&eglGetProcAddress);\n'
+                 '#else\n    const SymbolLoader libLoader(*mEGLLibrary);\n#endif')
+    replace_once(root, 'gfx/gl/GLLibraryEGL.cpp',
+                 '  {\n    const char internalFuncName[] =',
+                 '#ifndef MOZ_ORBIS_MESA\n  {\n    const char internalFuncName[] =')
+    replace_once(root, 'gfx/gl/GLLibraryEGL.cpp',
+                 '  // -\n\n  InitLibExtensions();',
+                 '#endif  // !MOZ_ORBIS_MESA\n\n  // -\n\n  InitLibExtensions();')
+    replace_once(root, 'gfx/gl/GLContextProviderEGL.cpp',
+                 '    auto dummySize = mozilla::gfx::IntSize{16, 16};',
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '    // Pbuffer only: no Vulkan swapchain or second VideoOut owner.\n'
+                 '    auto dummySize = mozilla::gfx::IntSize{1280, 720};\n'
+                 '#else\n    auto dummySize = mozilla::gfx::IntSize{16, 16};\n#endif')
+    replace_once(root, 'gfx/gl/GLContextProviderEGL.cpp',
+                 '#if defined(MOZ_WIDGET_ANDROID)\n  preferGles = true;\n'
+                 '#else\n  preferGles = StaticPrefs::gfx_egl_prefer_gles_enabled_AtStartup();\n'
+                 '#endif  // defined(MOZ_WIDGET_ANDROID)\n'
+                 '  RefPtr<GLContextEGL> gl = WithUseGles(preferGles);',
+                 '#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_ORBIS_MESA)\n'
+                 '  preferGles = true;\n'
+                 '#else\n  preferGles = StaticPrefs::gfx_egl_prefer_gles_enabled_AtStartup();\n'
+                 '#endif\n  RefPtr<GLContextEGL> gl = WithUseGles(preferGles);')
+    replace_once(root, 'gfx/webrender_bindings/RenderThread.cpp',
+                 '#ifdef XP_WIN\n  if (gfx::gfxVars::UseWebRenderANGLE()) {',
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '  gl = gl::GLContextProviderEGL::CreateHeadless(\n'
+                 '      {gl::CreateContextFlags::FORBID_SOFTWARE |\n'
+                 '       gl::CreateContextFlags::PREFER_ES3}, &aError);\n'
+                 '#elif defined(XP_WIN)\n  if (gfx::gfxVars::UseWebRenderANGLE()) {')
+    replace_once(root, 'gfx/webrender_bindings/RenderCompositor.cpp',
+                 '#include "RenderCompositor.h"',
+                 '#include "RenderCompositor.h"\n#ifdef MOZ_ORBIS_MESA\n'
+                 '#include "RenderCompositorOrbis.h"\n#endif')
+    replace_once(root, 'gfx/webrender_bindings/RenderCompositor.cpp',
+                 '  if (aWidget->AsDelegate() &&',
+                 '#ifdef MOZ_ORBIS_MESA\n'
+                 '  if (!aWidget->GetCompositorOptions().UseSoftwareWebRender()) {\n'
+                 '    return RenderCompositorOrbis::Create(aWidget, aError);\n'
+                 '  }\n#endif\n  if (aWidget->AsDelegate() &&')
+    replace_once(root, 'gfx/webrender_bindings/moz.build',
+                 'include("/ipc/chromium/chromium-config.mozbuild")',
+                 'if CONFIG["MOZ_ORBIS_MESA"]:\n'
+                 '    EXPORTS.mozilla.webrender += ["RenderCompositorOrbis.h"]\n'
+                 '    SOURCES += ["RenderCompositorOrbis.cpp"]\n\n'
+                 'include("/ipc/chromium/chromium-config.mozbuild")')
+    patch_orbis_widget_mesa(root)
+
+
+def patch_orbis_shared_memory_diagnostics(root):
+    """Failure-only, bounded existing-module logging; never retry/change mmap."""
+    replace_once(root, 'ipc/glue/SharedMemoryPlatform_posix.cpp',
+                 '  if (mem == MAP_FAILED) {\n'
+                 '    MOZ_LOG_FMT(gSharedMemoryLog, LogLevel::Warning, "call to mmap failed: {}",\n'
+                 '                strerror(errno));\n'
+                 '    return Nothing();\n'
+                 '  }',
+                 '''  if (mem == MAP_FAILED) {
+#ifdef __ORBIS__
+    const int mapError = errno;
+    // Off unless the operator enabled the existing SharedMemory log module.
+    // Bound records globally, not per thread; never dump mapped/content bytes.
+    static mozilla::Atomic<uint32_t, mozilla::Relaxed> failures(0);
+    uint32_t ticket = 32;
+    if (MOZ_LOG_TEST(gSharedMemoryLog, LogLevel::Warning)) {
+      // Saturate, rather than wrapping and restarting logging in a long run.
+      for (ticket = failures; ticket < 32; ticket = failures) {
+        if (failures.compareExchange(ticket, ticket + 1)) break;
+      }
+    }
+    if (ticket < 32) {
+      struct stat st = {};
+      const int fd = aHandle.mHandle.get();
+      errno = 0;
+      const int statResult = fstat(fd, &st);
+      const int statError = statResult == 0 ? 0 : errno;
+      errno = 0;
+      const int fdFlags = fcntl(fd, F_GETFL);
+      const int flagsError = fdFlags >= 0 ? 0 : errno;
+      const long pageSize = sysconf(_SC_PAGESIZE);
+      MOZ_LOG_FMT(gSharedMemoryLog, LogLevel::Warning,
+                  "Orbis shm mmap failure errno={} addr={:p} size={} offset={} "
+                  "prot={} flags={} fd={} fstat={} stat_errno={} file_size={} "
+                  "fd_flags={} flags_errno={} page_size={}",
+                  mapError, aFixedAddress, aSize, aOffset,
+                  PROT_READ | (aReadOnly ? 0 : PROT_WRITE), MAP_SHARED,
+                  fd, statResult, statError,
+                  statResult == 0 ? static_cast<int64_t>(st.st_size) : int64_t(-1),
+                  fdFlags, flagsError, pageSize);
+    }
+    errno = mapError;
+#endif
+    MOZ_LOG_FMT(gSharedMemoryLog, LogLevel::Warning, "call to mmap failed: {}",
+                strerror(errno));
+#ifdef __ORBIS__
+    errno = mapError;
+#endif
+    return Nothing();
+  }''')
+
+
+def patch_orbis_resource_accounting(root):
+    """Count real shared views; no allocation routing, retries or fake releases."""
+    path = 'ipc/glue/SharedMemoryPlatform_posix.cpp'
+    replace_once(root, path, 'namespace mozilla::ipc::shared_memory {',
+                 '#ifdef __ORBIS__\n'
+                 '#include "../../widget/orbis/OrbisResourceDiagnostics.h"\n#endif\n\n'
+                 'namespace mozilla::ipc::shared_memory {')
+    replace_once(root, path,
+                 '  if (mem == MAP_FAILED) {\n#ifdef __ORBIS__\n    const int mapError = errno;',
+                 '#ifdef __ORBIS__\n'
+                 '  mozilla::widget::RecordOrbisSharedMap(aSize, mem != MAP_FAILED);\n'
+                 '#endif\n  if (mem == MAP_FAILED) {\n#ifdef __ORBIS__\n    const int mapError = errno;')
+    replace_once(root, path,
+                 '    DebugOnly<bool> munmap_succeeded = munmap(mem, aSize) == 0;\n',
+                 '#ifdef __ORBIS__\n'
+                 '    const bool munmap_succeeded = munmap(mem, aSize) == 0;\n'
+                 '    mozilla::widget::RecordOrbisSharedUnmap(aSize, munmap_succeeded);\n'
+                 '#else\n'
+                 '    DebugOnly<bool> munmap_succeeded = munmap(mem, aSize) == 0;\n'
+                 '#endif\n')
+    replace_once(root, path,
+                 'void Platform::Unmap(void* aMemory, size_t aSize) { munmap(aMemory, aSize); }',
+                 'void Platform::Unmap(void* aMemory, size_t aSize) {\n'
+                 '  const int result = munmap(aMemory, aSize);\n'
+                 '#ifdef __ORBIS__\n'
+                 '  mozilla::widget::RecordOrbisSharedUnmap(aSize, result == 0);\n'
+                 '  // Failed releases stay in the live counter; never guess ownership.\n'
+                 '  if (result != 0) {\n'
+                 '    MOZ_LOG_FMT(gSharedMemoryLog, LogLevel::Warning,\n'
+                 '                "Orbis shm munmap failed size={} errno={}", aSize, errno);\n'
+                 '  }\n#else\n  (void)result;\n#endif\n}')
+
+
 def main():
     root = Path(sys.argv[1]).resolve()
+    patch_orbis_mesa(root)
+    patch_orbis_shared_memory_diagnostics(root)
+    patch_orbis_resource_accounting(root)
     replace_once(root, 'xpcom/ds/PLDHashTable.cpp', '#include "PLDHashTable.h"\n',
                  '#include "PLDHashTable.h"\n#ifdef MOZ_WIDGET_ORBIS\n'
                  '#include "../../orbisfox/OrbisTableFault.h"\n#endif\n')
@@ -184,10 +509,19 @@ def main():
                             '    USE_LIBS += ["mozavcodec", "mozavutil"]\n'
                             '    OS_LIBS += ' + repr(previous_libraries) + '\n\nEXPORTS += [\n')
     legacy_codec_build = 'if CONFIG["MOZ_WIDGET_TOOLKIT"] == "orbis":\n    USE_LIBS += ["mozavcodec", "mozavutil"]\n\nEXPORTS += [\n'
-    replace_once(root, 'dom/media/platforms/ffmpeg/moz.build', (previous_codec_build, legacy_codec_build, 'EXPORTS += [\n'),
+    old_codec_build = ('if CONFIG["MOZ_WIDGET_TOOLKIT"] == "orbis":\n'
+                       '    USE_LIBS += ["mozavcodec", "mozavutil"]\n'
+                       '    OS_LIBS += ' + repr(codec_libraries) + '\n\nEXPORTS += [\n')
+    native_libraries = [entry.replace('/media-codecs/native/', '/media-codecs/native-homebrew/')
+                        for entry in codec_libraries]
+    replace_once(root, 'dom/media/platforms/ffmpeg/moz.build',
+                 (old_codec_build, previous_codec_build, legacy_codec_build, 'EXPORTS += [\n'),
                  'if CONFIG["MOZ_WIDGET_TOOLKIT"] == "orbis":\n'
                  '    USE_LIBS += ["mozavcodec", "mozavutil"]\n'
-                 '    OS_LIBS += ' + repr(codec_libraries) + '\n\nEXPORTS += [\n')
+                 '    if CONFIG["MOZ_ORBIS_HOMEBREW_SDK"]:\n'
+                 '        OS_LIBS += ' + repr(native_libraries) + '\n'
+                 '    else:\n'
+                 '        OS_LIBS += ' + repr(codec_libraries) + '\n\nEXPORTS += [\n')
     register_cubeb_source(root)
     replace_once(root, 'media/libcubeb/src/moz.build', "Library('cubeb')\n",
                  "Library('cubeb')\n\n"
@@ -503,6 +837,8 @@ def main():
     replace_once(root, 'gfx/cairo/cairo/src/moz.build',
                  "if CONFIG['MOZ_WIDGET_TOOLKIT'] not in ('cocoa', 'uikit'):",
                  "if CONFIG['MOZ_WIDGET_TOOLKIT'] not in ('cocoa', 'uikit', 'orbis'):")
+    patch_orbis_webrender_freetype(root)
+    patch_native_libevent_rng_names(root)
     for name in ('gfx/2d/2D.h', 'gfx/2d/Factory.cpp',
                  'gfx/2d/UnscaledFontFreeType.h', 'gfx/2d/UnscaledFontFreeType.cpp',
                  'gfx/2d/NativeFontResourceFreeType.h', 'gfx/2d/NativeFontResourceFreeType.cpp'):
@@ -814,6 +1150,11 @@ def main():
                  '#if defined(__ORBIS__)\n    return nullptr; // No ANGLE fault-handler capability on this port.\n'
                  '#else\n    gPosixPageFaultHandler = new PosixPageFaultHandler(callback);\n'
                  '    return gPosixPageFaultHandler;\n#endif')
+    # Extend the pinned upstream condition before using it as an insertion
+    # anchor; already-prepared trees hid this fresh-checkout ordering requirement.
+    replace_once(root, 'widget/moz.build',
+                 'if toolkit in {"gtk", "cocoa", "windows", "android", "uikit"}:',
+                 'if toolkit in {"gtk", "cocoa", "windows", "android", "uikit", "orbis"}:')
     replace_once(root, 'widget/moz.build',
                  '    "nsPaper.cpp",\n    "nsPaperMargin.cpp",\n',
                  '    # Native paper objects require a supported printer backend.\n')
@@ -829,9 +1170,6 @@ def main():
     replace_once(root, 'build/moz.configure/flags.configure',
                  '            if target.os in ("DragonFly", "FreeBSD", "NetBSD", "OpenBSD"):',
                  '            if target.vendor != "orbis" and target.os in ("DragonFly", "FreeBSD", "NetBSD", "OpenBSD"):')
-    replace_once(root, 'widget/moz.build',
-                 'if toolkit in {"gtk", "cocoa", "windows", "android", "uikit"}:',
-                 'if toolkit in {"gtk", "cocoa", "windows", "android", "uikit", "orbis"}:')
     replace_once(root, 'widget/moz.build',
                  'if toolkit in ("gtk", "windows", "cocoa", "uikit", "android"):',
                  'if toolkit in ("gtk", "windows", "cocoa", "uikit", "android", "orbis"):')
@@ -945,8 +1283,30 @@ def main():
                  '#if defined(LINUX) || defined(SOLARIS)\n',
                  '#if defined(LINUX) || defined(SOLARIS) || defined(__ORBIS__)\n')
     replace_once(root, 'nsprpub/pr/src/pthreads/ptthread.c',
-                 '#if defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY)\n#include <pthread_np.h>',
-                 '#if !defined(__ORBIS__) && (defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY))\n#include <pthread_np.h>')
+                 ('#if defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY)\n#include <pthread_np.h>',
+                  '#if !defined(__ORBIS__) && (defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY))\n#include <pthread_np.h>'),
+                 '#if (!defined(__ORBIS__) || defined(ORBISFOX_HOMEBREW_SDK)) && (defined(OPENBSD) || defined(FREEBSD) || defined(DRAGONFLY))\n#include <pthread_np.h>')
+    # The native BSD netdb.h declares the five-argument public _r APIs. NSPR's
+    # existing locked, one-argument fallback must have private names instead;
+    # do not claim the system exports the public reentrant implementations.
+    replace_once(root, 'nsprpub/pr/src/misc/prnetdb.c',
+                 '#if defined(ANDROID)\n/* Android\'s Bionic libc system includes prototypes',
+                 '#if defined(ANDROID) || defined(ORBISFOX_HOMEBREW_SDK)\n'
+                 '/* The native SDK also declares public _r names: keep this locked fallback private. */\n'
+                 '/* Android\'s Bionic libc system includes prototypes')
+    replace_once(root, 'nsprpub/pr/src/misc/prnetdb.c', '#include <string.h>\n',
+                 '#include <string.h>\n#ifdef ORBISFOX_HOMEBREW_SDK\n'
+                 '#include "../../../../orbisfox/OrbisNsprNetdb.h"\n#endif\n')
+    replace_once(root, 'nsprpub/pr/src/misc/prnetdb.c',
+                 '#define GETHOSTBYNAME2(name, af) gethostbyname2(name, af)',
+                 '#ifdef ORBISFOX_HOMEBREW_SDK\n'
+                 '#define GETHOSTBYNAME2(name, af) OrbisNsprGetHostByName2(name, af)\n'
+                 '#else\n#define GETHOSTBYNAME2(name, af) gethostbyname2(name, af)\n#endif')
+    replace_once(root, 'nsprpub/pr/src/misc/prnetdb.c',
+                 '    return getprotobynumber(number);',
+                 '#ifdef ORBISFOX_HOMEBREW_SDK\n'
+                 '    return OrbisNsprGetProtoByNumber(number);\n'
+                 '#else\n    return getprotobynumber(number);\n#endif')
     # Use upstream's no-native-sampling fallback. Orbis ucontext/register and
     # cross-thread suspension ABIs have not been validated for the profiler.
     for arch in ('__x86_64__', '__aarch64__'):
@@ -985,8 +1345,10 @@ def main():
     replace_once(root, 'ipc/glue/SetProcessTitle.cpp',
                  '#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \\\n    defined(__DragonFly__)',
                  '#elif !defined(__ORBIS__) && (defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \\\n    defined(__DragonFly__))')
-    replace_once(root, 'ipc/glue/ProcessUtils_bsd.cpp',
-                 '#if !defined(XP_NETBSD)', '#if !defined(XP_NETBSD) && !defined(__ORBIS__)')
+    patch_native_ipc_primitives(root)
+    patch_native_worker_shutdown(root)
+    patch_native_link_gate_debug(root)
+    patch_portable_baseline_marker(root)
     replace_once(root, 'ipc/glue/SharedMemoryPlatform_posix.cpp',
                  '#include "SharedMemoryPlatform.h"\n',
                  '#include "SharedMemoryPlatform.h"\n\n#ifdef __ORBIS__\n'

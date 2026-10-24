@@ -5,7 +5,19 @@
 #include "nsIGfxInfo.h"
 #include "nsServiceManagerUtils.h"
 
+#ifdef MOZ_ORBIS_MESA
+extern "C" bool orbis_mesa_gpu_ready() __attribute__((weak));
+#endif
+
 namespace mozilla::widget {
+inline bool IsOrbisMesaGpuReady() {
+#ifdef MOZ_ORBIS_MESA
+  // Real startup GLES shader/pixel gate, not an invented GfxInfo device/status.
+  return orbis_mesa_gpu_ready && orbis_mesa_gpu_ready();
+#else
+  return false;
+#endif
+}
 inline nsresult GetOptionalGfxFeatureStatus(nsIGfxInfo* aInfo, int32_t aFeature,
                                           nsACString& aFailureId, int32_t* aStatus) {
   if (!aStatus) return NS_ERROR_INVALID_ARG;

@@ -6,4 +6,27 @@ imply_option("MOZ_APP_VENDOR", "OrbisFox")
 imply_option("MOZ_APP_UA_NAME", "OrbisFox")
 # Gecko requires one native history provider even for a windowless embedding.
 imply_option("MOZ_PLACES", True)
+# Experimental branch only. This compiles the static EGL/WebRender adapter;
+# it does NOT advertise a GPU, alter content privileges or select hardware WR.
+option("--enable-orbis-mesa", default=False,
+       help="Build the experimental Orbis Mesa/WebRender adapter")
+
+@depends("--enable-orbis-mesa")
+def orbis_mesa(value):
+    # False still emits an empty C #define; None must leave disabled guards undefined.
+    return True if value else None
+
+set_config("MOZ_ORBIS_MESA", orbis_mesa)
+set_define("MOZ_ORBIS_MESA", orbis_mesa)
+# ABI choice is independent of the GPU experiment. All prerequisites must be
+# rebuilt with the same native SDK; this is not an alternate allocator switch.
+option("--enable-orbis-homebrew-sdk", default=False,
+       help="Build against the pinned native homebrew SDK")
+
+@depends("--enable-orbis-homebrew-sdk")
+def orbis_homebrew_sdk(value):
+    return True if value else None
+
+set_config("MOZ_ORBIS_HOMEBREW_SDK", orbis_homebrew_sdk)
+set_define("MOZ_ORBIS_HOMEBREW_SDK", orbis_homebrew_sdk)
 include("../toolkit/moz.configure")

@@ -6,7 +6,7 @@ var OrbisFoxShellModel = (() => {
   const HTTPS = "https://example.com/";
   const GOOGLE = "https://www.google.com/";
   const Buttons = Object.freeze({cross:1, reload:2, address:4, menu:8, cancel:16,
-    left:32, right:64, up:128, down:256, previousTab:512, nextTab:1024});
+    left:32, right:64, up:128, down:256, previousTab:512, nextTab:1024, forward:2048});
   function resolveAddress(text, gates = {}) {
     if (typeof text !== "string" || text.length > 2048 || /[\x00-\x1f\x7f]/.test(text))
       throw new Error("Invalid address");
@@ -72,12 +72,12 @@ var OrbisFoxShellModel = (() => {
   }
   class Settings {
     constructor(serialized="{}",persist=null){
-      this.persist=persist;this.value={searchEngine:"google",cursorSpeed:1,defaultZoom:100,colorScheme:"system",homePage:"",restoreSession:false,globalPrivacyControl:false};
+      this.persist=persist;this.value={searchEngine:"google",cursorSpeed:1,defaultZoom:100,colorScheme:"system",homePage:"",restoreSession:false,globalPrivacyControl:false,reducedMotion:false};
       try{if(typeof serialized!=="string"||serialized.length>4096)throw Error();const parsed=JSON.parse(serialized);this.validate(parsed);this.value={searchEngine:parsed.searchEngine,cursorSpeed:parsed.cursorSpeed,defaultZoom:parsed.defaultZoom??100,colorScheme:parsed.colorScheme??"system",
-        homePage:parsed.homePage??"",restoreSession:parsed.restoreSession??false,globalPrivacyControl:parsed.globalPrivacyControl??false};}catch(_error){}
+        homePage:parsed.homePage??"",restoreSession:parsed.restoreSession??false,globalPrivacyControl:parsed.globalPrivacyControl??false,reducedMotion:parsed.reducedMotion??false};}catch(_error){}
     }
     validate(value){if(!value || typeof value.searchEngine!=="string" || !Object.hasOwn(SEARCH_ENGINES,value.searchEngine)||!Number.isFinite(value.cursorSpeed)||value.cursorSpeed<0.25||value.cursorSpeed>3||(value.defaultZoom!==undefined&&(!Number.isInteger(value.defaultZoom)||value.defaultZoom<50||value.defaultZoom>200||value.defaultZoom%10))||(value.colorScheme!==undefined&&!["system","light","dark"].includes(value.colorScheme))||
-      (value.restoreSession!==undefined&&typeof value.restoreSession!=="boolean")||(value.globalPrivacyControl!==undefined&&typeof value.globalPrivacyControl!=="boolean"))throw Error("Invalid browser settings");
+      (value.restoreSession!==undefined&&typeof value.restoreSession!=="boolean")||(value.globalPrivacyControl!==undefined&&typeof value.globalPrivacyControl!=="boolean")||(value.reducedMotion!==undefined&&typeof value.reducedMotion!=="boolean"))throw Error("Invalid browser settings");
       if(value.homePage!==undefined&&value.homePage!==""&&(typeof value.homePage!=="string"||value.homePage.length>1024||!/^https?:\/\//i.test(value.homePage)||resolveAddress(value.homePage,{web:true})!==value.homePage))throw Error("Invalid home page");}
     snapshot(){return {...this.value};}
     // Only known keys are stored, and a saved record must stay loadable.
@@ -198,8 +198,11 @@ var OrbisFoxShellModel = (() => {
       message:this.message,canBack:this.canBack,canForward:this.canForward,requested:this.requested,editing:this.editing,security:this.security,issuer:this.issuer};}
   }
   class Controller {
-    constructor() {this.previous = 0; this.direction = 0; this.nextRepeat = 0;}
-    update(buttons, now) {
+    constructor() {this.previous = 0; this.direction = 0; this.nextRepeat = 0; this.nextDelete = 0; this.editing = false; this.blocked = 0;}
+    update(buttons, now, editing = false) {
+      // Never reuse a held opener, Enter or Close as an action in the next mode.
+      if(editing!==this.editing){this.editing=editing;this.blocked|=this.previous;this.direction=0;}
+      this.blocked &= buttons;buttons &= ~this.blocked;
       const pressed = buttons & ~this.previous; this.previous = buttons;
       const actions = [];
       const direction = buttons & (Buttons.left | Buttons.right | Buttons.up | Buttons.down);
@@ -216,6 +219,10 @@ var OrbisFoxShellModel = (() => {
           if (!(pressed & direction)) actions.push(name);
           this.nextRepeat = now + 100;
         }
+      }
+      if(editing && (buttons & Buttons.address)){
+        if(pressed & Buttons.address)this.nextDelete=now+400;
+        else if(now>=this.nextDelete){actions.push('address');this.nextDelete=now+100;}
       }
       this.direction = direction; return actions;
     }

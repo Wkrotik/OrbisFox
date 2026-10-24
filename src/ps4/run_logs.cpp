@@ -1,10 +1,12 @@
 #include "orbisfox/run_logs.h"
+#include "orbisfox/allocator_flight.h"
 #include <orbis/libkernel.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <atomic>
 namespace {
-char directory[128];int heapAuditFD=-1;
+char directory[128];int heapAuditFD=-1,flightFD=-1;
+uint64_t flightCommitted=0,flightFailures=0,flightAttempted=0;
 std::atomic<bool> enabled{false};std::atomic<unsigned long long> generation{0};
 std::atomic_flag busy=ATOMIC_FLAG_INIT;
 struct Lock {Lock(){while(busy.test_and_set(std::memory_order_acquire))__asm__ volatile("pause");}~Lock(){busy.clear(std::memory_order_release);}};
@@ -22,7 +24,12 @@ bool save(const char* path,const char* bytes,size_t n,bool exclusive){
   if(sceKernelFsync(fd)<0)okay=false;
   if(sceKernelClose(fd)<0)okay=false;return okay;
 }
-void stop(){enabled.store(false);if(heapAuditFD>=0){sceKernelClose(heapAuditFD);heapAuditFD=-1;}++generation;}
+void stop(){
+  enabled.store(false);
+  if(heapAuditFD>=0){sceKernelClose(heapAuditFD);heapAuditFD=-1;}
+  if(flightFD>=0){sceKernelClose(flightFD);flightFD=-1;}
+  flightCommitted=flightFailures=flightAttempted=0;++generation;
+}
 bool begin(){
   stop();
   int rc=sceKernelMkdir("/data/orbisfox",0700);if(rc<0&&!existsError(rc))return false;
@@ -65,6 +72,44 @@ bool native_write_heap_audit(const char* text,size_t size){
   size_t written=0;
   while(written<size){const intptr_t rc=static_cast<intptr_t>(sceKernelWrite(heapAuditFD,text+written,size-written));if(rc<=0||size_t(rc)>size-written)return false;written+=size_t(rc);}
   return sceKernelFsync(heapAuditFD)==0;
+}
+bool native_write_allocator_flight(const AllocatorFlightEvent* events,size_t count,
+                                  unsigned long long run,bool force){
+  Lock lock;
+  if(!enabled.load()||run!=generation.load()||count>allocatorFlightCapacity||(!events&&count))return false;
+  if(flightFD<0){
+    if(!count)return true;
+    char path[256];if(!make_run_log_path(path,sizeof(path),directory,"allocator-flight.bin"))return false;
+    flightFD=sceKernelOpen(path,O_WRONLY|O_CREAT|O_EXCL,0600);if(flightFD<0)return false;
+  }
+  const auto put=[&](const void* data,size_t bytes,off_t at){
+    size_t done=0;
+    while(done<bytes){
+      const intptr_t n=static_cast<intptr_t>(sceKernelPwrite(flightFD,static_cast<const char*>(data)+done,bytes-done,at+off_t(done)));
+      if(n<=0||size_t(n)>bytes-done)return false;done+=size_t(n);
+    }
+    return true;
+  };
+  bool okay=true;
+  if(count){
+    // Validate sequence/record integrity before deriving a bounded file offset.
+    for(size_t i=0;i<count;++i)if(!events[i].sequence||events[i].checksum!=allocator_flight_checksum(events[i])||
+       (i&&events[i].sequence!=events[i-1].sequence+1))return false;
+    flightAttempted=events[count-1].sequence;
+    size_t done=0;
+    while(done<count){
+      const size_t slot=(events[done].sequence-1)%allocatorFlightCapacity;
+      size_t amount=count-done;if(amount>allocatorFlightCapacity-slot)amount=allocatorFlightCapacity-slot;
+      if(!put(events+done,amount*sizeof(*events),64+off_t(slot*sizeof(*events)))){okay=false;break;}
+      done+=amount;
+    }
+    if(okay)flightCommitted=flightAttempted;else ++flightFailures;
+  }
+  const uint64_t header[8]={allocatorFlightMagic,1,sizeof(AllocatorFlightEvent),allocatorFlightCapacity,
+                            flightCommitted,run,flightFailures,flightAttempted};
+  if(!put(header,sizeof(header),0)){++flightFailures;okay=false;}
+  if(force&&sceKernelFsync(flightFD)<0){++flightFailures;okay=false;}
+  return okay;
 }
 bool initialize_native_run_logs(){
   // Before constructors: native file APIs and constant-initialized atomics only.

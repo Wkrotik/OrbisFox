@@ -7,6 +7,20 @@
 #include <sys/types.h>
 #include <errno.h>
 #include <unistd.h>
+#ifdef ORBISFOX_HOMEBREW_SDK
+namespace orbisfox {
+bool initialize_native_stdio_locks() {
+  // The real native libc owns FILE and its recursive locking. Exercise that
+  // contract, without installing a musl lock replacement or claiming counters.
+  if(!stdout) {errno=EBADF;return false;}
+  flockfile(stdout);
+  const int result=ftrylockfile(stdout);
+  if(result==0) funlockfile(stdout);
+  funlockfile(stdout);
+  return result==0;
+}
+}
+#else
 namespace {
 // Do not introduce an unaudited SDK/native pthread_once_t layout boundary.
 std::atomic<unsigned> initializationState{0};
@@ -127,4 +141,5 @@ extern "C" void __wrap_clearerr(FILE* file) {LockedStream lock(file);__real_clea
 STATUS(feof)
 STATUS(ferror)
 #undef STATUS
-#endif
+#endif // ORBISFOX_HOMEBREW_SDK
+#endif // ORBISFOX_FULL_GECKO

@@ -7,6 +7,67 @@
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef ORBISFOX_HOMEBREW_SDK
+#include <stdlib.h>
+static_assert(sizeof(struct flock) == sizeof(orbisfox::FirmwareFlock));
+static_assert(offsetof(struct flock, l_type) == offsetof(orbisfox::FirmwareFlock, type));
+static_assert(offsetof(struct flock, l_start) == offsetof(orbisfox::FirmwareFlock, start));
+static_assert(F_RDLCK == 1 && F_WRLCK == 3 && F_UNLCK == 2);
+// Keep SQLite's existing explicit syscall hook, but pass the SDK's native BSD
+// records unchanged to its genuine fcntl import. No libc fcntl interposition.
+extern "C" int orbisfox_sqlite_fcntl(int fd, int command, ...) {
+    if (command == F_GETFD || command == F_GETFL || command == F_GETOWN)
+        return fcntl(fd, command, 0);
+    va_list args; va_start(args, command);
+    if (command == F_GETLK || command == F_SETLK || command == F_SETLKW) {
+        struct flock* argument = va_arg(args, struct flock*); va_end(args);
+        if (!argument) { errno = EFAULT; return -1; }
+        struct {
+            unsigned char before[32]; struct flock value;
+            unsigned char surplus[128], after[32];
+        } record;
+        memset(&record, 0xa5, sizeof(record)); record.value = *argument;
+        const int result = fcntl(fd, command, &record.value);
+        const auto intact = [](const auto& bytes) {
+            for (auto byte : bytes) if (byte != 0xa5) return false;
+            return true;
+        };
+        if (!intact(record.before) || !intact(record.surplus) || !intact(record.after)) {
+            errno = EOVERFLOW; return -1;
+        }
+        if (result == -1 || command != F_GETLK) return result;
+        if (record.value.l_sysid != 0 ||
+            (record.value.l_type != F_RDLCK && record.value.l_type != F_WRLCK &&
+             record.value.l_type != F_UNLCK)) { errno = EPROTO; return -1; }
+        *argument = record.value;
+        return result;
+    }
+    const int argument = va_arg(args, int); va_end(args);
+    return fcntl(fd, command, argument);
+}
+namespace orbisfox {
+bool probe_native_file_locks() {
+    char path[] = "/data/orbisfox/fcntl-native-XXXXXX";
+    const int fd = mkstemp(path);
+    if (fd < 0) { log("ERROR: native file-lock probe create errno=%d", errno); return false; }
+    struct flock record{}; record.l_type = F_RDLCK;
+    record.l_whence = SEEK_SET; record.l_len = 1;
+    const int read = orbisfox_sqlite_fcntl(fd, F_SETLK, &record);
+    record.l_type = F_WRLCK;
+    const int query = orbisfox_sqlite_fcntl(fd, F_GETLK, &record);
+    const bool ownLockInvisible = query == 0 && record.l_type == F_UNLCK;
+    record.l_type = F_WRLCK;
+    const int write = orbisfox_sqlite_fcntl(fd, F_SETLKW, &record);
+    record.l_type = F_UNLCK;
+    const int unlock = orbisfox_sqlite_fcntl(fd, F_SETLK, &record);
+    const int closed = close(fd), removed = unlink(path);
+    const bool okay = read == 0 && ownLockInvisible && write == 0 && unlock == 0 && closed == 0 && removed == 0;
+    log("File-lock native SDK guarded read/query/write-wait/unlock: %s results=%d/%d/%d/%d own-query-unlocked=%d close=%d remove=%d; not cross-process exclusion proof",
+        okay ? "PASS" : "FAIL", read, query, write, unlock, int(ownLockInvisible), closed, removed);
+    return okay;
+}
+}
+#else
 #include <orbis/libkernel.h>
 namespace {
 using NativeFcntl = int (*)(int, int, ...);
@@ -140,4 +201,5 @@ bool probe_native_file_locks() {
     return ok;
 }
 }
-#endif
+#endif // ORBISFOX_HOMEBREW_SDK
+#endif // ORBISFOX_FULL_GECKO

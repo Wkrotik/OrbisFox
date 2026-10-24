@@ -43,6 +43,7 @@ extern "C" int __real_posix_memalign(void** p,size_t a,size_t n){
   return SDK_ORIGINAL(posix_memalign)(p,a,n);
 }
 extern "C" void __real_free(void* p){RealEntry entry;SDK_ORIGINAL(free)(p);}
+#ifndef ORBISFOX_SDK_ALLOCATOR_BACKEND_ONLY
 struct Round {std::atomic<bool> start{false};std::atomic<void*> slots[8]{};};
 struct Worker {Round* round;unsigned index;};
 void* worker(void* opaque){
@@ -132,3 +133,4 @@ int main(){
   // Trace fd intentionally survives until process exit, matching destructor
   // lifetime on PS4. No stale closed-fd access from late wrapped deallocation.
 }
+#endif // ORBISFOX_SDK_ALLOCATOR_BACKEND_ONLY

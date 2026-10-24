@@ -7,7 +7,9 @@ FFVPX and this matching-major upstream implementation cannot share internal stat
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tarfile
@@ -25,10 +27,25 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(command, cwd, log):
+def run(command, cwd, log, env=None):
     with log.open('ab') as stream:
-        subprocess.run([str(x) for x in command], cwd=cwd, stdout=stream,
+        subprocess.run([str(x) for x in command], cwd=cwd, env=env, stdout=stream,
                        stderr=subprocess.STDOUT, check=True)
+
+
+def build_identity(host=False, sdk=None):
+    """Separate native ABI outputs; never reuse old SDK objects by timestamp."""
+    sdk = sdk if sdk is not None else os.environ.get('ORBISFOX_SDK', 'openorbis')
+    if sdk not in ('openorbis', 'homebrew'):
+        raise ValueError('Unknown ORBISFOX_SDK: ' + sdk)
+    native = not host and sdk == 'homebrew'
+    identity = {'sdk': 'host' if host else sdk}
+    if native:
+        verified = runpy.run_path(str(ROOT / 'scripts/fetch-homebrew-sdk.py'))['verify_sdk']()
+        identity['sdk_identity'] = {key: verified[key] for key in ('version', 'revision', 'archive_sha256')}
+        identity['native_driver_sha256'] = sha(ROOT / 'scripts/homebrew-cc.py')
+    name = 'host' if host else ('native-homebrew' if native else 'native')
+    return ROOT / 'build/media-codecs' / name, identity, dict(os.environ, ORBISFOX_SDK=sdk)
 
 
 def source():
@@ -71,11 +88,11 @@ def symbols(archives):
     return result
 
 
-def build(host=False, jobs=4):
+def build(host=False, jobs=4, sdk=None):
+    out, sdk_identity, env = build_identity(host, sdk)
     if not (ROOT / '.deps/host-tools/bin/nasm').is_file():
         subprocess.run([sys.executable, str(ROOT / 'scripts/bootstrap-nasm.py')], check=True)
     src = source()
-    out = ROOT / 'build/media-codecs' / ('host' if host else 'native')
     out.mkdir(parents=True, exist_ok=True)
     log = out / 'build.log'
     command = [src / 'configure', '--disable-all', '--disable-autodetect',
@@ -96,10 +113,10 @@ def build(host=False, jobs=4):
     stamp = out / 'configuration.json'
     identity = {'command': [str(x) for x in command], 'source_sha256': SHA256,
                 'builder_sha256': sha(Path(__file__)),
-                'compiler_wrapper_sha256': sha(ROOT / 'scripts/orbis-cc.py')}
+                'compiler_wrapper_sha256': sha(ROOT / 'scripts/orbis-cc.py'), **sdk_identity}
     if not stamp.exists() or json.loads(stamp.read_text()) != identity:
-        run(command, out, log)
-        if not host:
+        run(command, out, log, env)
+        if not host and sdk_identity['sdk'] == 'openorbis':
             # SDK libc advertises sysctl but provides no sys/sysctl.h. Use the
             # existing real sysconf/CPUID path, not a fake sysctl implementation.
             config = out / 'config.h'
@@ -117,7 +134,7 @@ def build(host=False, jobs=4):
         if f'#define CONFIG_{decoder.upper()}_DECODER 1' not in components:
             raise ValueError('Missing real decoder: ' + decoder)
     targets = [f'lib{name}/lib{name}.a' for name in LIBRARIES]
-    run(['make', '-j' + str(jobs), *targets], out, log)
+    run(['make', '-j' + str(jobs), *targets], out, log, env)
     archives = [out / name for name in targets]
     names = symbols(archives)
     required = {'ff_h264_decoder', 'ff_aac_decoder', 'avcodec_find_decoder', 'avcodec_send_packet',
@@ -129,12 +146,13 @@ def build(host=False, jobs=4):
     prefixed = []
     for archive in archives:
         output = out / ('liborbis_' + archive.name[3:])
-        run(['llvm-objcopy', '--redefine-syms=' + str(mapping), archive, output], out, log)
+        run(['llvm-objcopy', '--redefine-syms=' + str(mapping), archive, output], out, log, env)
         prefixed.append(output)
     after = symbols(prefixed)
     if any(name in after for name in names) or not {PREFIX + name for name in names} <= after:
         raise ValueError('Incomplete codec namespace isolation')
     report = {'stage': 'real isolated software codecs', 'version': VERSION, 'host': host,
+              **sdk_identity, 'build_identity': identity,
               'source_url': f'https://ffmpeg.org/releases/ffmpeg-{VERSION}.tar.xz',
               'source_sha256': SHA256, 'license': 'LGPL-2.1-or-later', 'gpl': False,
               'network': False, 'hardware_decoding': False, 'console_tested': False,
@@ -150,5 +168,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', action='store_true', help='Build host decode-test variant, not a firmware proof')
     parser.add_argument('--jobs', type=int, default=4, choices=range(1, 33))
+    parser.add_argument('--sdk', choices=('openorbis', 'homebrew'),
+                        default=os.environ.get('ORBISFOX_SDK', 'openorbis'))
     args = parser.parse_args()
-    build(args.host, args.jobs)
+    build(args.host, args.jobs, args.sdk)

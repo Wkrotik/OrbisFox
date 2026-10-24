@@ -13,12 +13,21 @@
 #include "orbisfox/native_audio.h"
 #include "orbisfox/native_allocator.h"
 #include "orbisfox/run_logs.h"
+#ifndef ORBISFOX_HOMEBREW_SDK
 #include "orbisfox/sdk_heap_memory.h"
+#endif
+#include "orbisfox/memory_pressure.h"
+#include "orbisfox/vm_summary.h"
+#include "mozilla/widget/OrbisResourceDiagnostics.h"
+#include "nsMemoryPressure.h"
 #include "../OrbisGCChunkMemory.h"
 #include "../OrbisExecutableMemory.h"
 #include "../OrbisGlyphDiagnostics.h"
 #include "../OrbisTableFault.h"
 #include "js/Initialization.h"
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+extern "C" bool OrbisPortableBaselineEntered();
+#endif
 #include "orbisfox/jit_memory_probe.h"
 #include "orbisfox/browser_controls.h"
 static_assert(ORBIS_PAD_BUTTON_OPTIONS == 0x0008 && ORBIS_PAD_BUTTON_CIRCLE == 0x2000 &&
@@ -32,8 +41,14 @@ static_assert(ORBIS_PAD_BUTTON_OPTIONS == 0x0008 && ORBIS_PAD_BUTTON_CIRCLE == 0
 #include "mozilla/widget/OrbisTaskDiagnostics.h"
 #include "nsXULAppAPI.h"
 #include "XREShellData.h"
+#ifdef MOZ_ORBIS_MESA
+#include "orbisfox/mesa_binding.h"
+#include "orbisfox/mesa_probe.h"
+#endif
 #include "nsCOMPtr.h"
 #include "nsIFile.h"
+#include "nsXPCOM.h"
+#include "mozilla/Logging.h"
 #include "nspr_link_probe.h"
 #include "orbisfox/native_stat.h"
 #include "orbisfox/native_clock.h"
@@ -55,6 +70,11 @@ namespace orbisfox { bool probe_gecko_shared_memory(); bool probe_gecko_cxx_guar
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
+#ifdef ORBISFOX_HOMEBREW_SDK
+// The native SDK imports this real libkernel data symbol (also used by NSPR),
+// but its BSD unistd.h does not declare it. Do not synthesize an environment.
+extern "C" char** environ;
+#endif
 
 using namespace orbisfox;
 namespace {
@@ -94,11 +114,35 @@ struct MonitorLogLock {
   explicit MonitorLogLock(NativeState& s):state(s){if(pthread_mutex_lock(&state.monitorLogMutex))__builtin_trap();}
   ~MonitorLogLock(){if(pthread_mutex_unlock(&state.monitorLogMutex))__builtin_trap();}
 };
+void writeCompletedTasks(FILE* output,const mozilla::widget::OrbisTaskDiagnostics& tasks,uint64_t& cursor) {
+  if(tasks.completedCount && tasks.completed[0].serial>cursor+1)
+    fprintf(output,"main-task-history lost=%llu; bounded history, inclusive nested times overlap\n",
+      (unsigned long long)(tasks.completed[0].serial-cursor-1));
+  for(unsigned i=0;i<tasks.completedCount;++i){
+    const auto& task=tasks.completed[i];if(task.serial<=cursor)continue;
+    fprintf(output,"main-task-complete id=%llu end-us=%llu inclusive-us=%llu depth=%u detailed=%d name=%s\n",
+      (unsigned long long)task.serial,(unsigned long long)task.ended,(unsigned long long)task.micros,
+      task.depth,task.detailed,task.name);
+    cursor=task.serial;
+  }
+}
 void* monitor(void* opaque) {
   auto& state = *static_cast<NativeState*>(opaque);
   FILE* output=nullptr;uint64_t outputGeneration=0;
-  uint64_t lastMissingGlyphDraws=0;
+  uint64_t lastMissingGlyphDraws=0,lastCompletedTask=0;
+  FlexibleMemoryPressure pressure;
+  uint64_t pressureSignals=0;
   for (unsigned sample = 0; !state.monitorStop.load(); ++sample) {
+    // This is runtime memory management, not diagnostic capture. The native
+    // query and infallible thread-safe notification work with logging OFF too.
+    size_t available=0;
+    const int32_t memoryResult=sceKernelAvailableFlexibleMemorySize(reinterpret_cast<size_t>(&available));
+    const auto pressureEvent=pressure.sample(memoryResult,available,sceKernelGetProcessTime());
+    if(pressureEvent==FlexibleMemoryPressure::Event::Low){
+      NS_NotifyOfEventualMemoryPressure(MemoryPressureState::LowMemory);++pressureSignals;
+    }else if(pressureEvent==FlexibleMemoryPressure::Event::Recovered){
+      NS_NotifyOfEventualMemoryPressure(MemoryPressureState::NoPressure);
+    }
     {
       MonitorLogLock lock(state);
       const auto currentGeneration=native_diagnostics_generation();
@@ -127,10 +171,18 @@ void* monitor(void* opaque) {
       (unsigned long long)ui.polls,(unsigned long long)ui.scanouts,(unsigned long long)ui.frameSerial,ui.x,ui.y,ui.failed,
       (unsigned long long)(ui.scanouts?ui.scanoutMicros/ui.scanouts:0),(unsigned long long)ui.maxScanoutMicros);
     const auto tasks=mozilla::widget::GetOrbisTaskDiagnostics();
+    // A new capture must not replay completions from before diagnostics opt-in.
+    if(newOutput)lastCompletedTask=tasks.completedSerial;
+    writeCompletedTasks(output,tasks,lastCompletedTask);
     const uint64_t taskNow=sceKernelGetProcessTime();
     fprintf(output,"main-task sample=%u depth=%u active-age-us=%llu events=%llu long-events=%llu last-us=%llu max-inclusive-us=%llu last-long-name=%s detail-us=%llu detail-name=%s\n",
       sample,tasks.depth,(unsigned long long)(tasks.activeStart&&taskNow>=tasks.activeStart?taskNow-tasks.activeStart:0),
       (unsigned long long)tasks.events,(unsigned long long)tasks.longEvents,(unsigned long long)tasks.lastMicros,(unsigned long long)tasks.maxMicros,tasks.lastLongName,(unsigned long long)tasks.lastDetailedMicros,tasks.lastDetailedName);
+    const auto pump=mozilla::widget::GetOrbisPumpDiagnostics();
+    fprintf(output,"pump-phases sample=%u phase=%u active-age-us=%llu last-us=%llu,%llu,%llu,%llu,%llu max-us=%llu,%llu,%llu,%llu,%llu; order=poll,input,mailbox,map,present; 0=idle; inclusive approximate samples\n",
+      sample,pump.phase,(unsigned long long)(pump.activeStart&&taskNow>=pump.activeStart?taskNow-pump.activeStart:0),
+      (unsigned long long)pump.lastMicros[1],(unsigned long long)pump.lastMicros[2],(unsigned long long)pump.lastMicros[3],(unsigned long long)pump.lastMicros[4],(unsigned long long)pump.lastMicros[5],
+      (unsigned long long)pump.maxMicros[1],(unsigned long long)pump.maxMicros[2],(unsigned long long)pump.maxMicros[3],(unsigned long long)pump.maxMicros[4],(unsigned long long)pump.maxMicros[5]);
     const auto glyphs=orbisfox::missing_glyph_stats();
     if(glyphs.draws!=lastMissingGlyphDraws){
       fprintf(output,"missing-glyph sample=%u draws=%llu codepoints-first64=",sample,(unsigned long long)glyphs.draws);
@@ -138,13 +190,50 @@ void* monitor(void* opaque) {
       fputc('\n',output);lastMissingGlyphDraws=glyphs.draws;
     }
     if(sample%10==0){
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+      fprintf(output,"portable-baseline sample=%u core-entered=%d native-codegen=0; entry is not a speedup claim\n",sample,int(OrbisPortableBaselineEntered()));
+#endif
       const auto jit=orbisfox::orbis_jit_memory_stats();
       fprintf(output,"jit-memory sample=%u ready=%d claimed=%d shared-reserved=%zu committed=%zu phase=%u rc=0x%x\n",sample,jit.ready,jit.claimed,jit.reservedBytes,jit.committedBytes,jit.failedPhase,unsigned(jit.lastResult));
       const auto gc=orbisfox::gc_chunk_memory_stats();
-      const auto sdk=orbisfox::sdk_direct_heap_stats();size_t available=0;
-      const int32_t memoryResult=sceKernelAvailableFlexibleMemorySize(reinterpret_cast<size_t>(&available));
-      fprintf(output,"memory sample=%u gc-direct-maps=%zu gc-direct-bytes=%zu gc-alloc-failures=%llu gc-map-failures=%llu sdk-direct-bytes=%zu flexible-rc=0x%x flexible-available-MiB-rounded=%zu\n",
-        sample,gc.mappings,gc.bytes,(unsigned long long)gc.allocationFailures,(unsigned long long)gc.mapFailures,sdk.bytes,unsigned(memoryResult),available);
+#ifdef ORBISFOX_HOMEBREW_SDK
+      fprintf(output,"memory sample=%u gc-direct-maps=%zu gc-direct-bytes=%zu gc-alloc-failures=%llu gc-map-failures=%llu native-libc-heap-bytes=unavailable flexible-rc=0x%x flexible-available-bytes=%zu pressure=%d signals=%llu\n",
+        sample,gc.mappings,gc.bytes,(unsigned long long)gc.allocationFailures,(unsigned long long)gc.mapFailures,unsigned(memoryResult),available,pressure.pressured(),(unsigned long long)pressureSignals);
+#else
+      const auto sdk=orbisfox::sdk_direct_heap_stats();
+      fprintf(output,"memory sample=%u gc-direct-maps=%zu gc-direct-bytes=%zu gc-alloc-failures=%llu gc-map-failures=%llu sdk-direct-bytes=%zu flexible-rc=0x%x flexible-available-bytes=%zu pressure=%d signals=%llu\n",
+        sample,gc.mappings,gc.bytes,(unsigned long long)gc.allocationFailures,(unsigned long long)gc.mapFailures,sdk.bytes,unsigned(memoryResult),available,pressure.pressured(),(unsigned long long)pressureSignals);
+#endif
+      const auto resources=mozilla::widget::GetOrbisResourceDiagnostics();
+      if(sample%30==0){
+        // The SDK packs its trailing name at 33. Only use the prefix/flags;
+        // do not interpret the unused trailing name/padding as native metadata.
+        static_assert(sizeof(OrbisKernelVirtualQueryInfo)==72 &&
+          offsetof(OrbisKernelVirtualQueryInfo,unk01)==0 && offsetof(OrbisKernelVirtualQueryInfo,unk02)==8 &&
+          offsetof(OrbisKernelVirtualQueryInfo,offset)==16 && offsetof(OrbisKernelVirtualQueryInfo,unk04)==24 &&
+          offsetof(OrbisKernelVirtualQueryInfo,unk05)==28 && offsetof(OrbisKernelVirtualQueryInfo,name)==33,
+          "SDK virtual-query prefix ABI changed");
+        const auto vm=orbisfox::summarizeVm<OrbisKernelVirtualQueryInfo>(sceKernelVirtualQuery);
+        fprintf(output,"vm sample=%u regions=%llu virtual-bytes=%llu flexible-virtual=%llu direct-virtual=%llu stack-virtual=%llu committed-flexible-virtual=%llu query-end-rc=0x%x truncated=%d malformed=%d\n",sample,
+          (unsigned long long)vm.regions,(unsigned long long)vm.virtualBytes,
+          (unsigned long long)vm.flexibleBytes,(unsigned long long)vm.directBytes,
+          (unsigned long long)vm.stackBytes,(unsigned long long)vm.committedFlexibleBytes,
+          unsigned(vm.lastResult),vm.truncated,vm.malformed);
+      }
+      fprintf(output,"resources sample=%u shm-live-view-bytes=%llu shm-peak-view-bytes=%llu maps=%llu unmaps=%llu map-fail=%llu unmap-fail=%llu gpu-submitted=%llu gpu-published=%llu gpu-deferred=%llu gpu-fail=%llu enqueue-us=%llu copy-us=%llu polls=%llu waits=%llu wait-us=%llu\n",sample,
+        (unsigned long long)resources.sharedMappedBytes,(unsigned long long)resources.sharedPeakBytes,
+        (unsigned long long)resources.sharedMaps,(unsigned long long)resources.sharedUnmaps,
+        (unsigned long long)resources.sharedMapFailures,(unsigned long long)resources.sharedUnmapFailures,
+        (unsigned long long)resources.gpuSubmitted,(unsigned long long)resources.gpuPublished,
+        (unsigned long long)resources.gpuDeferred,(unsigned long long)resources.gpuFailures,
+        (unsigned long long)resources.gpuEnqueueMicros,(unsigned long long)resources.gpuCopyMicros,
+        (unsigned long long)resources.gpuPolls,(unsigned long long)resources.gpuWaits,
+        (unsigned long long)resources.gpuWaitMicros);
+      const auto graphics=mozilla::widget::GetOrbisGraphicsDiagnostics();
+      fprintf(output,"graphics sample=%u hw-selected=%llu sw-selected=%llu create-attempts=%llu create-success=%llu policy-flags=0x%x config-flags=0x%x hw-status=%u wr-status=%u create-result=%u\n",sample,
+        (unsigned long long)graphics.hardwareSelections,(unsigned long long)graphics.softwareSelections,
+        (unsigned long long)graphics.createAttempts,(unsigned long long)graphics.createSuccesses,
+        graphics.policyFlags,graphics.configFlags,graphics.hardwareStatus,graphics.webRenderStatus,graphics.creationResult);
     }
     fflush(output);
       }
@@ -350,10 +439,20 @@ int main() {
   // Retain branded splash while real startup gates run. No development overlay.
   text(state.surface, 40, 660, "Starting OrbisFox...", 2, {235,242,255,255});
   state.presenter->present(state.surface);
-  mkdir("/data/orbisfox/cache", 0700);
-  mkdir("/data/orbisfox/gecko-profile", 0700);
-  setenv("TMPDIR", "/data/orbisfox/cache", 1);
-  setenv("HOME", "/data/orbisfox/gecko-profile", 1);
+#ifdef ORBISFOX_HOMEBREW_SDK
+  constexpr const char* profilePath = "/data/orbisfox/homebrew-profile";
+  constexpr const char* cachePath = "/data/orbisfox/homebrew-cache";
+#elif defined(MOZ_ORBIS_MESA)
+  constexpr const char* profilePath = "/data/orbisfox/mesa-profile";
+  constexpr const char* cachePath = "/data/orbisfox/mesa-cache";
+#else
+  constexpr const char* profilePath = "/data/orbisfox/gecko-profile";
+  constexpr const char* cachePath = "/data/orbisfox/cache";
+#endif
+  mkdir(cachePath, 0700);
+  mkdir(profilePath, 0700);
+  setenv("TMPDIR", cachePath, 1);
+  setenv("HOME", profilePath, 1);
   // The pinned engine ignores the historical remote-autostart preference.
   // Use its supported nonofficial-build switch before any XRE initialization.
   if (setenv("MOZ_FORCE_DISABLE_E10S", "1", 1) != 0) {
@@ -363,7 +462,7 @@ int main() {
   const bool verboseLogging = access("/data/orbisfox/verbose-gecko-log", F_OK) == 0;
   setenv("MOZ_LOG", !native_diagnostics_enabled() ? "" : verboseLogging ?
       "timestamp,sync,SharedMemory:5,nsStreamPump:5,nsThreadPool:5,DocumentChannel:5,nsRedirect:5,ProcessIsolation:5,ScriptLoader:5,nsSocketTransport:5,nsHostResolver:5,nsHttp:3,mozStorage:5,cookie:5,userfonts:4" :
-      "timestamp,nsHostResolver:3,nsHttp:2,mozStorage:2,cookie:2,userfonts:4", 1);
+      "timestamp,SharedMemory:2,nsHostResolver:3,nsHttp:2,mozStorage:2,cookie:2,userfonts:4", 1);
   log("Gecko detailed logging: %s; native lifecycle/security/failure logs retained", verboseLogging ? "verbose synchronous opt-in" : "bounded lower-volume buffered default");
   setenv("ORBISFOX_LOG_DIR",orbisfox::native_run_log_directory(),1);
   // Runtime diagnostics owns the log sink through LogModule::SetLogFile.
@@ -387,10 +486,15 @@ int main() {
   const int directoryError = errno;
   log("Gecko filesystem: chdir GRE=%d errno=%d", directoryResult, directoryError);
   state.shellControls = access("/data/orbisfox/diagnostic-only", F_OK) != 0;
-  mozilla::widget::SetOrbisFoxHostCallbacks({&state, present, poll, hostLog, checkpoint});
   char name[] = "/app0/eboot.bin", greFlag[] = "-g", appFlag[] = "-a";
   char gre[] = "/app0/gecko", fileFlag[] = "-f", script[] = "/app0/assets/gecko-startup.js";
   char* argv[] = {name, greFlag, gre, appFlag, gre, fileFlag, script, nullptr};
+  // Even pre-XPCOM probes can enter LazyLogModule on an error path. Establish
+  // its real main-thread/logging owner first, and retain it through teardown.
+  ScopedLogging geckoLogging;
+  mozilla::LogModule::Init(7, argv);
+  log("Gecko logging foundation initialized before startup probes");
+  mozilla::widget::SetOrbisFoxHostCallbacks({&state, present, poll, hostLog, checkpoint});
   log("Gecko XPConnect native initialization begin; pthread gate=%s", diagnostics.threads);
   log("Native CPU affinity: available=%d; SDK-compatible sysconf configured=%ld online=%ld; actual native query, no fixed CPU count",
       native_available_processor_count(), sysconf(_SC_NPROCESSORS_CONF), sysconf(_SC_NPROCESSORS_ONLN));
@@ -403,17 +507,40 @@ int main() {
   const bool cxxGuardsReady = clocksReady && probe_gecko_cxx_guards();
   const bool skiaSyncReady = cxxGuardsReady && probe_gecko_skia_sync();
   const bool allocatorReady = skiaSyncReady && probe_native_allocator();
+#ifndef ORBISFOX_HOMEBREW_SDK
   log("SDK heap bin audit: full startup checks; browsing checks at realloc, SDK copy and discard boundaries; arenas=%llu; no metadata writes or null skipping; not a crash fix claim",(unsigned long long)native_allocator_audited_arena_count());
+#endif
   const bool stdioReady = allocatorReady && probe_native_stdio_locks();
   const bool fileLocksReady = stdioReady && probe_native_file_locks();
   const bool sharedMemoryReady = fileLocksReady && probe_gecko_shared_memory();
+#ifdef MOZ_ORBIS_MESA
+  // Bind real executable GNM exports, then validate an actual offscreen GLES
+  // shader/readback before XRE/Gecko context owners. No scanout is created.
+  if (!sharedMemoryReady || !prepare_native_mesa() || !probe_native_mesa_gpu()) {
+    // The static EGL loader refuses entry while bindings are unavailable.
+    // Keep the existing software path usable; never execute an unbound thunk.
+    log("Experimental Mesa: native GPU unavailable; retaining software rendering");
+  }
+#endif
+
   // Capability selection must precede JS_Init, not happen in chrome JS.
   const bool audioReady=prepare_native_audio();
   fprintf(stdout,"Native AudioOut default endpoint ready=%d (silence/complete/close probe)\n",audioReady);fflush(stdout);
+#ifdef ENABLE_PORTABLE_BASELINE_INTERP
+  const bool jitReady=false;
+  JS::DisableJitBackend();
+  log("Portable Baseline Interpreter: compiled codegen-none, runtime selected; no executable-memory probe or generated-code permission claim");
+#else
   const bool jitReady=sharedMemoryReady && prepare_native_jit_memory();
   if(!jitReady){JS::DisableJitBackend();log("Native baseline JIT: capability gate unavailable; supported interpreter fallback selected before JS_Init");}
+#endif
   const bool heapDebugRequested = native_diagnostics_enabled() && access("/data/orbisfox/heap-debug", F_OK) == 0;
   bool heapDiagnosticsReady = !heapDebugRequested;
+#ifdef ORBISFOX_HOMEBREW_SDK
+  if (heapDebugRequested)
+    log("Native BSD heap guards: unavailable; refusing requested legacy heap-debug mode, no allocator interposition enabled");
+  else log("Native BSD heap guards: off; real system libc retains allocator/lock ownership");
+#else
   if (sharedMemoryReady && heapDebugRequested) {
     const int fd = open(orbisfox::NativeRunLogPath("heap-diagnostics.bin").c_str(), O_CREAT|O_EXCL|O_RDWR, 0600);
     heapDiagnosticsReady = fd >= 0 && ftruncate(fd, 64+4096*64+768) == 0 && configure_native_allocator_diagnostics(fd);
@@ -421,6 +548,7 @@ int main() {
     // Successful fd stays owned until process exit, including late destructors.
     log("Native heap diagnostics: %s; real SDK backing, requested-size guards, 196608-block tracking limit / 16MiB records, 512-block / 8MiB requested-backing quarantine, v2 coverage trace. Saturation retains existing guards but new pointers use raw SDK without guards. Realloc copies/quarantines in this mode; slower diagnostic run, not a production fix.", heapDiagnosticsReady ? "ACTIVE" : "FAILED");
   } else log("Native heap diagnostics: off (opt-in /data/orbisfox/heap-debug); direct SDK allocator retained");
+#endif
   bool greReady = false;
   if (sharedMemoryReady && heapDiagnosticsReady) {
     nsCOMPtr<nsIFile> greDirectory;
@@ -508,13 +636,21 @@ int main() {
   const int result = uiReady ? bootstrap->XRE_XPCShellMain(7, argv, environ, &shellData) : EXIT_FAILURE;
   state.nativeUi.stop(); // join before reusing controller/Presenter on ended screen
   state.monitorStop.store(true);
-  if (monitorResult == 0) pthread_join(monitorThread, nullptr);
+  if (monitorResult == 0) {
+    const int joined = pthread_join(monitorThread, nullptr);
+    if (joined != 0) {
+      log("Native monitor join failed rc=%d; stack-state ownership unknown", joined);
+      __builtin_trap(); // A possibly live worker must not outlive its state.
+    }
+  }
   mozilla::widget::SetOrbisFoxHostCallbacks({});
   bootstrap.reset(); // Dispose in libxul, then shut SQLite down after XPCOM.
   // Never steal a live engine's code arena if JS_ShutDown has not run yet.
   if(!orbisfox::orbis_jit_memory_stats().claimed)orbisfox::shutdown_orbis_executable_memory();
+#ifndef ORBISFOX_HOMEBREW_SDK
   if (heapDebugRequested && heapDiagnosticsReady)
     log("Native heap diagnostic shutdown drain/trace IO: %s", checkpoint_native_allocator_diagnostics() ? "PASS (not whole-heap proof)" : "FAIL");
+#endif
   log("Gecko SQLite lifetime shutdown result: %d", mozilla::AutoSQLiteLifetime::getInitResult());
   log("Gecko XPConnect shutdown returned %d; %llu VideoOut frames", result, (unsigned long long)state.frames);
   // Keep VideoOut/controller operational if startup fails or the OS exit request

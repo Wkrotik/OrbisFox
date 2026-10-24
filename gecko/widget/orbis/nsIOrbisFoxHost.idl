@@ -5,11 +5,12 @@
 interface nsIWindowlessBrowser;
 
 /* Trusted native bring-up controller, never injected into web documents. */
-[scriptable, uuid(e8b42773-b7ac-43aa-9b74-95e82d6d0673)]
+[scriptable, uuid(e07ba124-4bc6-47eb-b79b-bb20f340acfe)]
 interface nsIOrbisFoxHost : nsISupports {
   nsIWindowlessBrowser createBrowser(in unsigned long width, in unsigned long height);
   nsIWindowlessBrowser createChromeBrowser(in unsigned long width, in unsigned long height);
   void sendEscape();
+  void sendEnter();
   void setPointerInputEnabled(in boolean enabled);
   void setCursorSpeed(in double multiplier);
   readonly attribute boolean diagnosticsEnabled;
@@ -34,6 +35,7 @@ interface nsIOrbisFoxHost : nsISupports {
   readonly attribute unsigned long buttons;
   readonly attribute unsigned long long framesPresented;
   readonly attribute boolean softwareWebRender;
+  readonly attribute boolean nativeGpuReady;
   readonly attribute boolean nativeNetworkReady;
   readonly attribute boolean nativeJitReady;
   readonly attribute boolean nativeAudioReady;

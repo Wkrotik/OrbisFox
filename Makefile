@@ -8,7 +8,8 @@ CXX_RUNTIME := $(CURDIR)/.deps/libcxx-orbis
 GECKO_BUILD := $(CURDIR)/build/gecko-spidermonkey
 CPPFLAGS := --target=x86_64-pc-freebsd12-elf -nostdinc -D__ORBIS__ -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -isystem $(CXX_RUNTIME)/include/c++/v1 -isystem $(CURDIR)/.deps/sdk-overlay -isystem $(SDK)/include -isystem $(RESOURCE_DIR)/include -Iinclude
 CXXFLAGS := -std=c++20 -O2 -g -fPIC -mno-red-zone -funwind-tables -fno-exceptions -fno-rtti -fno-sized-deallocation -fno-aligned-new -Wall -Wextra -Werror -MMD -MP
-SOURCES := $(wildcard src/*.cpp) $(wildcard src/ps4/*.cpp)
+# Experimental GPU sources are selected only by the explicit full-Gecko builder.
+SOURCES := $(filter-out src/ps4/native_mesa.cpp src/ps4/native_mesa_probe.cpp src/ps4/mesa_runtime_bridge.cpp,$(wildcard src/*.cpp) $(wildcard src/ps4/*.cpp))
 OBJECTS := $(patsubst src/%.cpp,build/obj/%.o,$(SOURCES))
 # Optional firmware services are explicitly loaded and resolved at runtime.
 LIBS := -L$(CXX_RUNTIME)/lib -lc++ -lc++abi -lunwind -lc -lkernel -lSceSysmodule

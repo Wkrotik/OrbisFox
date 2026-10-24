@@ -1,5 +1,6 @@
 #ifdef ORBISFOX_FULL_GECKO
 #include "orbisfox/native_allocator.h"
+#ifndef ORBISFOX_HOMEBREW_SDK
 #include "orbisfox/heap_expand_fallback.h"
 #include <sys/types.h>
 #ifdef ORBISFOX_NATIVE_DIRECT_HEAP
@@ -12,6 +13,7 @@ extern "C" void* __real___mmap(void*,size_t,int,int,int,off_t);
 #include "orbisfox/heap_diagnostics.h"
 #ifdef ORBISFOX_SDK_BIN_AUDIT
 #include "orbisfox/heap_bin_audit.h"
+#include "orbisfox/allocator_flight.h"
 // SDK-owned state is mutable; only our accessor view is read-only. Declaring
 // the actual global const would give optimizers an invalid immutability promise.
 extern "C" unsigned char orbisfox_sdk_malloc_state[];
@@ -63,6 +65,48 @@ void initialize(){
 orbisfox::HeapBinAudit binAudit;
 const char* lastGoodOperation="none",*lastGoodPhase="none";uintptr_t lastGoodCaller=0;
 bool allApiAudit=true,reclaimVerified=false;
+[[maybe_unused]] bool mesaBoundaryAudit=false;
+struct ApiContext {uintptr_t input=0;size_t bytes=0;} currentApi,lastGoodApi;
+bool auditAllBoundaries(){
+  if(allApiAudit)return true; // Original startup invariant coverage.
+#ifdef ORBISFOX_NATIVE_RUN_LOGS
+  return mesaBoundaryAudit && orbisfox::native_diagnostics_enabled();
+#else
+  return false;
+#endif
+}
+#ifdef ORBISFOX_NATIVE_RUN_LOGS
+orbisfox::AllocatorFlightBuffer<> flight;
+void flightPush(const char* operation,unsigned phase,uintptr_t site,uintptr_t input,
+                uintptr_t output,size_t bytes,uint64_t extra=0){
+  const int saved=errno;
+  if(mesaBoundaryAudit&&orbisfox::native_diagnostics_enabled()){
+    uint64_t thread=0;const auto self=pthread_self();static_assert(sizeof(self)<=sizeof(thread));
+    memcpy(&thread,&self,sizeof(self));
+    orbisfox::AllocatorFlightEvent event{};event.caller=site;event.input=input;event.output=output;
+    event.bytes=bytes;event.extra=extra;event.thread=thread;
+    event.operation=orbisfox::allocator_flight_operation(operation);event.phase=uint8_t(phase);
+    event.depth=depth>UINT16_MAX?UINT16_MAX:uint16_t(depth);
+    flight.push(event,orbisfox::native_diagnostics_generation(),orbisfox::native_write_allocator_flight);
+  }else flight.discard();
+  errno=saved;
+}
+void flightFlush(){
+  const int saved=errno;
+  if(mesaBoundaryAudit&&orbisfox::native_diagnostics_enabled())
+    flight.flush(orbisfox::native_write_allocator_flight,true);
+  else flight.discard();
+  errno=saved;
+}
+#else
+void flightPush(const char*,unsigned,uintptr_t,uintptr_t,uintptr_t,size_t,uint64_t=0){}
+void flightFlush(){}
+#endif
+// Protected by the recursive allocator mutex; historical context, not ownership.
+struct DispatchContext {uintptr_t table=0;size_t bytes=0,capacity=0;unsigned phase=0;} lastDispatch;
+#ifdef ORBISFOX_NATIVE_RUN_LOGS
+unsigned dispatchRecords=0;
+#endif
 struct ReallocContext {bool active=false;uintptr_t input=0,output=0;size_t bytes=0;} reallocContext;
 struct LeafContext {uintptr_t first=0,second=0;size_t bytes=0;} leafContext;
 struct Endpoint {uintptr_t head=0,tail=0;uint64_t headSize=0,tailSize=0;};
@@ -76,13 +120,16 @@ void snapshotEndpoints(Endpoint (&out)[64]){
 }
 void auditBins(const char* operation,uintptr_t site,const char* phase){
   const auto failure=binAudit.check(orbisfox_sdk_malloc_state);
-  if(!failure.code){lastGoodOperation=operation;lastGoodCaller=site;lastGoodPhase=phase;return;}
+  if(!failure.code){lastGoodOperation=operation;lastGoodCaller=site;lastGoodPhase=phase;lastGoodApi=currentApi;return;}
+  flightPush("fault",3,site,currentApi.input,failure.chunk,currentApi.bytes,failure.code);
+  flightFlush();
   // No stdio, allocation, pointer repair or private-state mutation on failure.
-  char text[1024];size_t n=0;
+  char text[1536];size_t n=0;
   const auto append=[&](const char* p){while(*p && n<sizeof(text)-1)text[n++]=*p++;};
   const auto hex=[&](uint64_t value){append("0x");for(int s=60;s>=0;s-=4)if(n<sizeof(text)-1)text[n++]="0123456789abcdef"[(value>>s)&15];};
   append("ORBISFOX SDK BIN AUDIT: phase=");append(phase);append(" api=");append(operation);
-  append(" caller=");hex(site);append(" code=");hex(failure.code);append(" bin=");hex(failure.bin);
+  append(" caller=");hex(site);append(" api-in=");hex(currentApi.input);append(" api-bytes=");hex(currentApi.bytes);
+  append(" code=");hex(failure.code);append(" bin=");hex(failure.bin);
   append(" chunk=");hex(failure.chunk);append(" actual=");hex(failure.actual);append(" expected=");hex(failure.expected);
   uint64_t header[4];if(binAudit.describe(failure.chunk,header)){
     append(" psize=");hex(header[0]);append(" csize=");hex(header[1]);append(" next=");hex(header[2]);append(" prev=");hex(header[3]);
@@ -93,7 +140,16 @@ void auditBins(const char* operation,uintptr_t site,const char* phase){
     if(reallocSnapshot){append(" realloc-before-head=");hex(beforeRealloc[failure.bin].head);append(" realloc-before-head-size=");hex(beforeRealloc[failure.bin].headSize);append(" realloc-before-tail=");hex(beforeRealloc[failure.bin].tail);append(" realloc-before-tail-size=");hex(beforeRealloc[failure.bin].tailSize);}
     if(leafSnapshot){append(" leaf-before-head=");hex(beforeLeaf[failure.bin].head);append(" leaf-before-head-size=");hex(beforeLeaf[failure.bin].headSize);append(" leaf-before-tail=");hex(beforeLeaf[failure.bin].tail);append(" leaf-before-tail-size=");hex(beforeLeaf[failure.bin].tailSize);}
   }
-  append(" last-good-api=");append(lastGoodOperation);append(" last-good-caller=");hex(lastGoodCaller);append(" last-good-phase=");append(lastGoodPhase);append("\n");
+  if(lastDispatch.phase){
+    append(" last-dispatch-table=");hex(lastDispatch.table);append(" last-dispatch-bytes=");hex(lastDispatch.bytes);
+    append(" last-dispatch-capacity=");hex(lastDispatch.capacity);append(" last-dispatch-phase=");hex(lastDispatch.phase);
+  }
+  append(" last-good-api=");append(lastGoodOperation);append(" last-good-caller=");hex(lastGoodCaller);append(" last-good-phase=");append(lastGoodPhase);
+  append(" last-good-in=");hex(lastGoodApi.input);append(" last-good-bytes=");hex(lastGoodApi.bytes);
+#ifdef ORBISFOX_NATIVE_RUN_LOGS
+  append(flight.ioFailed()?" flight-IO-error=1":" flight-IO-error=0");
+#endif
+  append("\n");
 #ifdef ORBISFOX_NATIVE_RUN_LOGS
   orbisfox::native_write_heap_audit(text,n);
 #endif
@@ -101,22 +157,26 @@ void auditBins(const char* operation,uintptr_t site,const char* phase){
 }
 #endif
 struct HeapLock {
-  const char* operation;uintptr_t site;
-  HeapLock(const char* name="internal",uintptr_t address=0,void* input=nullptr,size_t bytes=0):operation(name),site(address){
+  const char* operation;uintptr_t site,inputPointer,output=0;size_t requested;uint64_t extra=0;
+  void* result(void* pointer){output=reinterpret_cast<uintptr_t>(pointer);return pointer;}
+  HeapLock(const char* name="internal",uintptr_t address=0,void* input=nullptr,size_t bytes=0):operation(name),site(address),inputPointer(reinterpret_cast<uintptr_t>(input)),requested(bytes){
     (void)input;(void)bytes;
     require(orbisfox::initialize_native_allocator_lock());require(pthread_mutex_lock(&mutex)==0);++depth;entries.fetch_add(1,std::memory_order_relaxed);
 #ifdef ORBISFOX_SDK_BIN_AUDIT
+    if(operation[0]!='i')flightPush(operation,1,site,inputPointer,0,requested);
     if(depth==1){
+      currentApi={reinterpret_cast<uintptr_t>(input),bytes};
       reallocContext={operation[0]=='r',reinterpret_cast<uintptr_t>(input),0,bytes};leafContext={};reallocSnapshot=leafSnapshot=false;
-      if(allApiAudit || reallocContext.active)auditBins(operation,site,"before");
+      if(auditAllBoundaries() || reallocContext.active)auditBins(operation,site,"before");
       if(reallocContext.active){snapshotEndpoints(beforeRealloc);reallocSnapshot=true;}
     }
 #endif
   }
   ~HeapLock(){
 #ifdef ORBISFOX_SDK_BIN_AUDIT
+    if(operation[0]!='i')flightPush(operation,2,site,inputPointer,output,requested,extra);
     if(depth==1){
-      if(allApiAudit || reallocContext.active)auditBins(operation,site,"after");
+      if(auditAllBoundaries() || reallocContext.active)auditBins(operation,site,"after");
       reallocContext.active=false;
     }
 #endif
@@ -145,6 +205,9 @@ void record(const orbisfox::HeapDiagnosticEvent& e){
   errno=saved;
 }
 void fault(const char* message,const orbisfox::HeapDiagnosticEvent& e){
+#ifdef ORBISFOX_SDK_BIN_AUDIT
+  flightPush("fault",3,e.caller,e.pointer,0,e.size);flightFlush();
+#endif
   char text[768];size_t n=0;
   const auto append=[&](const char* value){while(*value&&n<sizeof(text)-1)text[n++]=*value++;};
   const auto hex=[&](uint64_t value){append("0x");for(int shift=60;shift>=0;shift-=4)if(n<sizeof(text)-1)text[n++]="0123456789abcdef"[(value>>shift)&15];};
@@ -173,6 +236,44 @@ uint64_t native_allocator_realloc_copy_fix_count(){HeapLock lock;return reallocC
 size_t native_allocator_audited_arena_count(){HeapLock lock;return binAudit.arenaCount();}
 void configure_native_allocator_reclaim(bool verified){HeapLock lock;reclaimVerified=verified;}
 void configure_native_allocator_bin_audit(bool allCalls){HeapLock lock;allApiAudit=allCalls;}
+void configure_native_allocator_mesa_boundary_audit(){HeapLock lock;mesaBoundaryAudit=true;}
+void checkpoint_native_mesa_dispatch(void* table,size_t bytes,unsigned phase){
+#ifdef ORBISFOX_NATIVE_RUN_LOGS
+  // No queries, locking, logging, or changed allocation behavior when OFF.
+  if(!native_diagnostics_enabled())return;
+  const int saved=errno;
+  {
+    HeapLock lock("Mesa-dispatch",caller(__builtin_return_address(0)),table,bytes);
+    lock.extra=phase;
+    lastDispatch={reinterpret_cast<uintptr_t>(table),bytes,0,phase};
+    auditBins("Mesa-dispatch",lock.site,"checkpoint-before");
+    // Guarded diagnostics may expose an interior user pointer; use their public
+    // capacity, never hand that pointer to the SDK's raw metadata reader.
+    if(table)lastDispatch.capacity=diagnostics.enabled()
+      ?diagnostics.usable(table,lock.site,[](void* p){return __real_malloc_usable_size(p);})
+      :__real_malloc_usable_size(table);
+    lock.output=lastDispatch.capacity;
+    const bool tooSmall=table&&lastDispatch.capacity<bytes;
+    if(dispatchRecords<128||tooSmall){
+      if(dispatchRecords<128)++dispatchRecords;
+      char text[384];size_t n=0;
+      const auto append=[&](const char* p){while(*p&&n<sizeof(text)-1)text[n++]=*p++;};
+      const auto hex=[&](uint64_t value){append("0x");for(int s=60;s>=0;s-=4)if(n<sizeof(text)-1)text[n++]="0123456789abcdef"[(value>>s)&15];};
+      append("ORBISFOX MESA DISPATCH: phase=");hex(phase);append(" table=");hex(lastDispatch.table);
+      append(" bytes=");hex(bytes);append(" capacity=");hex(lastDispatch.capacity);append("\n");
+      native_write_heap_audit(text,n);
+    }
+    // Stop on a genuine capacity violation before the next original write.
+    // Never pad, relocate, free, or pretend the allocation was larger.
+    if(tooSmall)fault("Mesa dispatch allocation smaller than requested",
+      {0,0,lastDispatch.table,0,bytes,lock.site,0,0});
+    auditBins("Mesa-dispatch",lock.site,"checkpoint-after");
+  }
+  errno=saved;
+#else
+  (void)table;(void)bytes;(void)phase;
+#endif
+}
 #endif
 bool configure_native_allocator_diagnostics(int fd){
   HeapLock lock;if(fd<0||diagnostics.enabled())return false;
@@ -188,7 +289,7 @@ bool checkpoint_native_allocator_diagnostics(){
 }
 #ifdef ORBISFOX_SDK_BIN_AUDIT
 extern "C" void* __wrap___expand_heap(size_t* size){
-  HeapLock lock("__expand_heap",reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+  HeapLock lock("__expand_heap",reinterpret_cast<uintptr_t>(__builtin_return_address(0)),nullptr,*size);
   const size_t requested=*size;bool retried=false;
   void* p=nullptr;
 #ifdef ORBISFOX_NATIVE_DIRECT_HEAP
@@ -216,12 +317,13 @@ extern "C" void* __wrap___expand_heap(size_t* size){
 #endif
     (void)write(STDERR_FILENO,text,used);errno=saved;
   }
-  return p;
+  lock.extra=p?*size:0;return lock.result(p);
 }
 // SDK free-page discard is optional. Until an isolated native retention probe
 // proves its range contract, return a real unsupported error, not fake success.
 extern "C" int __wrap___madvise(void* address,size_t bytes,int advice){
-  HeapLock lock("SDK-discard",reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+  HeapLock lock("SDK-discard",reinterpret_cast<uintptr_t>(__builtin_return_address(0)),address,bytes);
+  lock.extra=static_cast<uint64_t>(advice);
   const int saved=errno;
   leafContext={reinterpret_cast<uintptr_t>(address),static_cast<uintptr_t>(advice),bytes};
   leafSnapshot=false;auditBins("SDK-discard",lock.site,"discard-before");
@@ -235,7 +337,7 @@ extern "C" int __wrap___madvise(void* address,size_t bytes,int advice){
   errno=rc?failure:saved;return rc;
 }
 extern "C" int __wrap___munmap(void* address,size_t bytes){
-  HeapLock lock("SDK-unmap",reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+  HeapLock lock("SDK-unmap",reinterpret_cast<uintptr_t>(__builtin_return_address(0)),address,bytes);
   leafContext={reinterpret_cast<uintptr_t>(address),0,bytes};
   leafSnapshot=false;auditBins("SDK-unmap",lock.site,"unmap-before");
   snapshotEndpoints(beforeLeaf);leafSnapshot=true;
@@ -253,12 +355,13 @@ extern "C" int __wrap___munmap(void* address,size_t bytes){
 }
 #ifdef ORBISFOX_NATIVE_DIRECT_HEAP
 extern "C" void* __wrap___mmap(void* desired,size_t bytes,int protection,int flags,int fd,off_t offset){
-  HeapLock lock("SDK-map",reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+  HeapLock lock("SDK-map",reinterpret_cast<uintptr_t>(__builtin_return_address(0)),desired,bytes);
+  lock.extra=uint32_t(flags);
   if(!desired && flags==0x1002 && protection==3 && fd==-1 && !offset && bytes && !(bytes%16384)){
     void* p=orbisfox::map_sdk_direct_heap(bytes,protection);
-    if(p && p!=reinterpret_cast<void*>(UINTPTR_MAX))return p;
+    if(p && p!=reinterpret_cast<void*>(UINTPTR_MAX))return lock.result(p);
   }
-  return __real___mmap(desired,bytes,protection,flags,fd,offset);
+  return lock.result(__real___mmap(desired,bytes,protection,flags,fd,offset));
 }
 #endif
 #endif
@@ -268,7 +371,8 @@ extern "C" void* __wrap___mmap(void* desired,size_t bytes,int protection,int fla
 // Bound writes by the NEW genuine SDK allocation, including guarded/nested
 // backend calls whose allocation capacity differs from the public request.
 extern "C" void* orbisfox_sdk_realloc_copy(void* destination,const void* source,size_t bytes){
-  HeapLock lock("SDK-copy",reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
+  HeapLock lock("SDK-copy",reinterpret_cast<uintptr_t>(__builtin_return_address(0)),destination,bytes);
+  lock.extra=reinterpret_cast<uintptr_t>(source);
 #ifdef ORBISFOX_SDK_BIN_AUDIT
   leafContext={reinterpret_cast<uintptr_t>(destination),reinterpret_cast<uintptr_t>(source),bytes};
   leafSnapshot=false;auditBins("SDK-copy",lock.site,"copy-before");
@@ -285,7 +389,7 @@ extern "C" void* orbisfox_sdk_realloc_copy(void* destination,const void* source,
 #ifdef ORBISFOX_SDK_BIN_AUDIT
   auditBins("SDK-copy",lock.site,"copy-after");
 #endif
-  return result;
+  return lock.result(result);
 }
 #endif
 // The genuine SDK allocator remains the single owner. Never write __libc flags.
@@ -293,13 +397,13 @@ extern "C" void* orbisfox_sdk_realloc_copy(void* destination,const void* source,
 // memalign/realloc inspect real chunk metadata internally; nested wrapped SDK
 // calls must receive raw pointers, not guarded user pointers.
 extern "C" void* __wrap_malloc(size_t size){
-  HeapLock lock("malloc",caller(__builtin_return_address(0)));if(!guarded())return __real_malloc(size);
-  return diagnostics.allocate(size,16,caller(__builtin_return_address(0)),[](size_t n){return __real_malloc(n);});
+  HeapLock lock("malloc",caller(__builtin_return_address(0)),nullptr,size);if(!guarded())return lock.result(__real_malloc(size));
+  return lock.result(diagnostics.allocate(size,16,caller(__builtin_return_address(0)),[](size_t n){return __real_malloc(n);}));
 }
 extern "C" void* __wrap_calloc(size_t count,size_t size){
-  HeapLock lock("calloc",caller(__builtin_return_address(0)));if(!guarded())return __real_calloc(count,size);
+  HeapLock lock("calloc",caller(__builtin_return_address(0)),nullptr,count&&size>SIZE_MAX/count?SIZE_MAX:count*size);lock.extra=count;if(!guarded())return lock.result(__real_calloc(count,size));
   if(count&&size>SIZE_MAX/count){errno=ENOMEM;return nullptr;}
-  return diagnostics.allocate(count*size,16,caller(__builtin_return_address(0)),[](size_t n){return __real_calloc(1,n);});
+  return lock.result(diagnostics.allocate(count*size,16,caller(__builtin_return_address(0)),[](size_t n){return __real_calloc(1,n);}));
 }
 extern "C" void* __wrap_realloc(void* pointer,size_t size){
   HeapLock lock("realloc",caller(__builtin_return_address(0)),pointer,size);if(!guarded()){
@@ -307,41 +411,46 @@ extern "C" void* __wrap_realloc(void* pointer,size_t size){
 #ifdef ORBISFOX_SDK_BIN_AUDIT
     if(depth==1)reallocContext.output=reinterpret_cast<uintptr_t>(result);
 #endif
-    return result;
+    return lock.result(result);
   }
-  return diagnostics.reallocate(pointer,size,caller(__builtin_return_address(0)),[](void* p,size_t n){return __real_realloc(p,n);});
+  return lock.result(diagnostics.reallocate(pointer,size,caller(__builtin_return_address(0)),[](void* p,size_t n){return __real_realloc(p,n);}));
 }
 extern "C" void __wrap_free(void* pointer){
-  const int saved=errno;{HeapLock lock("free",caller(__builtin_return_address(0)));if(guarded())diagnostics.release(pointer,caller(__builtin_return_address(0)));else __real_free(pointer);}errno=saved;
+  const int saved=errno;{HeapLock lock("free",caller(__builtin_return_address(0)),pointer);if(guarded())diagnostics.release(pointer,caller(__builtin_return_address(0)));else __real_free(pointer);}errno=saved;
 }
 extern "C" size_t __wrap_malloc_usable_size(void* pointer){
-  HeapLock lock("malloc_usable_size",caller(__builtin_return_address(0)));if(!guarded())return __real_malloc_usable_size(pointer);
-  return diagnostics.usable(pointer,caller(__builtin_return_address(0)),[](void* p){return __real_malloc_usable_size(p);});
+  HeapLock lock("malloc_usable_size",caller(__builtin_return_address(0)),pointer);
+  lock.output=guarded()?diagnostics.usable(pointer,caller(__builtin_return_address(0)),[](void* p){return __real_malloc_usable_size(p);}):__real_malloc_usable_size(pointer);
+  return lock.output;
 }
 #define ALIGNED(name) \
 extern "C" void* __wrap_##name(size_t alignment,size_t size){ \
-  HeapLock lock(#name,caller(__builtin_return_address(0)));if(!guarded()||!powerAlignment(alignment))return __real_##name(alignment,size); \
-  return diagnostics.allocate(size,alignment,caller(__builtin_return_address(0)),[&](size_t n){return __real_##name(alignment,n);}); \
+  HeapLock lock(#name,caller(__builtin_return_address(0)),nullptr,size);lock.extra=alignment;if(!guarded()||!powerAlignment(alignment))return lock.result(__real_##name(alignment,size)); \
+  return lock.result(diagnostics.allocate(size,alignment,caller(__builtin_return_address(0)),[&](size_t n){return __real_##name(alignment,n);})); \
 }
 ALIGNED(memalign)
 ALIGNED(__memalign)
 #undef ALIGNED
 extern "C" void* __wrap_aligned_alloc(size_t alignment,size_t size){
-  HeapLock lock("aligned_alloc",caller(__builtin_return_address(0)));
+  HeapLock lock("aligned_alloc",caller(__builtin_return_address(0)),nullptr,size);lock.extra=alignment;
   // Pass invalid requests unchanged to the genuine SDK. Diagnostic padding
   // must not conceal a size/alignment mismatch (SDK policy is not replaced).
-  if(!guarded()||!powerAlignment(alignment)||size%alignment)return __real_aligned_alloc(alignment,size);
-  return diagnostics.allocate(size,alignment,caller(__builtin_return_address(0)),[&](size_t n){return __real_aligned_alloc(alignment,n);});
+  if(!guarded()||!powerAlignment(alignment)||size%alignment)return lock.result(__real_aligned_alloc(alignment,size));
+  return lock.result(diagnostics.allocate(size,alignment,caller(__builtin_return_address(0)),[&](size_t n){return __real_aligned_alloc(alignment,n);}));
 }
 extern "C" int __wrap_posix_memalign(void** pointer,size_t alignment,size_t size){
-  HeapLock lock("posix_memalign",caller(__builtin_return_address(0)));if(!guarded()||!pointer||alignment<sizeof(void*)||!powerAlignment(alignment))return __real_posix_memalign(pointer,alignment,size);
+  HeapLock lock("posix_memalign",caller(__builtin_return_address(0)),nullptr,size);lock.extra=alignment;
+  if(!guarded()||!pointer||alignment<sizeof(void*)||!powerAlignment(alignment)){
+    const int rc=__real_posix_memalign(pointer,alignment,size);if(!rc&&pointer)lock.output=reinterpret_cast<uintptr_t>(*pointer);return rc;
+  }
   const int saved=errno;
   int result=0;void* user=diagnostics.allocate(size,alignment,caller(__builtin_return_address(0)),[&](size_t n){void* raw=nullptr;result=__real_posix_memalign(&raw,alignment,n);return result?nullptr:raw;});
-  errno=saved;if(!user)return result?result:ENOMEM;*pointer=user;return 0;
+  errno=saved;if(!user)return result?result:ENOMEM;*pointer=lock.result(user);return 0;
 }
 extern "C" void* __wrap_valloc(size_t size){
-  HeapLock lock("valloc",caller(__builtin_return_address(0)));if(!guarded())return __real_valloc(size);
+  HeapLock lock("valloc",caller(__builtin_return_address(0)),nullptr,size);if(!guarded())return lock.result(__real_valloc(size));
   const int page=getpagesize();if(page<=0||!powerAlignment(size_t(page))){errno=EINVAL;return nullptr;}
-  return diagnostics.allocate(size,size_t(page),caller(__builtin_return_address(0)),[](size_t n){return __real_valloc(n);});
+  lock.extra=size_t(page);return lock.result(diagnostics.allocate(size,size_t(page),caller(__builtin_return_address(0)),[](size_t n){return __real_valloc(n);}));
 }
-#endif
+#endif // ORBISFOX_HOMEBREW_SDK: native system libc owns its heap and locks.
+#endif // ORBISFOX_FULL_GECKO

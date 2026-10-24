@@ -97,6 +97,34 @@ def verify_oelf(path):
     return checked
 
 
+def auth_info_bytes(value):
+    result = bytes.fromhex(value)
+    if len(result) != 0x88:
+        raise ValueError(f'Authentication record must be 136 bytes, not {len(result)}')
+    return result
+
+
+def verify_self(path, authinfo, paid):
+    """Check emitted SELF metadata (also used after package extraction).
+
+    Retained GPL-3.0-or-later validation from the standalone Mesa probe.
+    """
+    expected = auth_info_bytes(authinfo)
+    data = path.read_bytes()
+    if len(data) < 32 or struct.unpack_from('<I', data)[0] != 0x1d3d154f:
+        raise ValueError('Expected a PS4 SELF header')
+    header_size, metadata_size = struct.unpack_from('<HH', data, 12)
+    if struct.unpack_from('<Q', data, 16)[0] != len(data):
+        raise ValueError('SELF declared file size differs from payload')
+    end = header_size + metadata_size
+    if header_size < 32 or metadata_size < 256 or end > len(data):
+        raise ValueError('Invalid SELF metadata bounds')
+    signature = (struct.pack('<QQ', 0x88, paid) + expected[8:]).ljust(256, b'\0')
+    if data[end-256:end] != signature:
+        raise ValueError('SELF authentication record length, PAID or contents mismatch')
+    return {'authinfo_bytes': 0x88, 'paid': hex(paid), 'signature_verified': True}
+
+
 def verify_service_imports(path):
     """Optional service entry points must not bypass explicit runtime loading."""
     data = path.read_bytes()
