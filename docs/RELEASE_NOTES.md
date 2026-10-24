@@ -1,10 +1,11 @@
-# Next alpha prerelease — draft
+# OrbisFox 0.68 Alpha 3 — prerelease candidate
 
 **Experimental PS4 browser. Not production-ready.**
 
-This is the pre-uBO baseline merged from `95137c3`. Publication and downloadable
-assets are pending a fresh matching package and verified native-SDK source/relink
-materials; these notes do not announce an available release.
+This is the pre-uBO baseline merged from `95137c3`. The package keeps internal
+version **00.68**. Publication requires a fresh matching package and verified
+native-SDK source/relink materials; check the GitHub prerelease for asset
+availability rather than treating these candidate notes as a download announcement.
 
 ## Changes
 
@@ -33,5 +34,6 @@ decoding and DRM are unavailable. YouTube/Twitch live playback and controlled
 WebSocket page loading are not established as fixed. Retain the in-process/no-
 content-sandbox warning. Diagnostics stay off by default.
 
-This merged snapshot has not yet had a fresh native build, package extraction or
-console acceptance run. Earlier dev-worktree evidence is not a new release pass.
+Fresh native build, package extraction and unchanged/modified-library relink
+verification are release gates, not console acceptance. No new console acceptance
+run is claimed for this candidate; earlier dev-worktree evidence is separate.
