@@ -44,7 +44,7 @@ bool begin(){
     if(!existsError(rc))return false;
   }
   if(!created)return false;
-  Text metadata;metadata.append("{\"version\":\"0.68\",\"category\":\"gd\",\"diagnostics\":true,\"run_id\":\"");metadata.append(id.bytes);
+  Text metadata;metadata.append("{\"version\":\"0.69\",\"category\":\"gd\",\"diagnostics\":true,\"run_id\":\"");metadata.append(id.bytes);
   metadata.append("\",\"wall_seconds_hex\":\"");metadata.hex(static_cast<uint64_t>(wall.tv_sec));metadata.append("\",\"wall_usec_hex\":\"");metadata.hex(static_cast<uint64_t>(wall.tv_usec));
   metadata.append("\",\"process_usec_hex\":\"");metadata.hex(process);metadata.append("\",\"native_clock_ok\":");metadata.append(clockRc==0?"true":"false");metadata.append("}\n");
   char path[256];if(!orbisfox::make_run_log_path(path,sizeof(path),directory,"run-meta.json")||!metadata.okay||!save(path,metadata.bytes,metadata.n,true))return false;

@@ -64,7 +64,7 @@ class HomebrewPackageTest(unittest.TestCase):
             result = subprocess.run(DRIVER['compiler_command']([
                 '--cxx', '-std=c++20', str(source), '-o', str(elf)]), capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
-            app = {'version': '0.68', 'sdk': 'homebrew', 'sdk_identity': native['identity'],
+            app = {'version': '0.69', 'sdk': 'homebrew', 'sdk_identity': native['identity'],
                    'legacy_allocator_stdio_mapping_interposition_excluded': True,
                    'final_engine_application_linked': True, 'baseline_unchanged': True,
                    'upstream_static_nss_closure_verified': True,
@@ -127,7 +127,7 @@ class HomebrewPackageTest(unittest.TestCase):
             PACKAGE['PKG'].verify_self(stage / 'eboot.bin', native['authinfo'], 0x3800000000000035)
             entries = {'TITLE': (128, identity['title']), 'TITLE_ID': (12, identity['title_id']),
                        'CONTENT_ID': (48, identity['content_id']), 'CATEGORY': (4, 'gd'),
-                       'FORMAT': (4, 'obs'), 'APP_VER': (8, '0.68'), 'VERSION': (8, '0.68')}
+                       'FORMAT': (4, 'obs'), 'APP_VER': (8, '0.69'), 'VERSION': (8, '0.69')}
             command = [sdk / 'bin/orbis-mksfo', '-i', 'APP_TYPE=1', '-i', 'ATTRIBUTE=32',
                        '-i', 'SYSTEM_VER=1020', '-i', 'DOWNLOAD_DATA_SIZE=0']
             for name, (size, value) in entries.items():

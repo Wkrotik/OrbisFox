@@ -23,7 +23,7 @@ class SourceReleaseTests(unittest.TestCase):
         for name in EXPORT.SOURCE_DIRS:
             (root / name).mkdir()
             (root / name / 'README.md').write_text(name + '\n')
-        (root / 'scripts/package-gecko.py').write_text("VERSION = '0.68'\n")
+        (root / 'scripts/package-gecko.py').write_text("VERSION = '0.69'\n")
         (root / 'src/main.cpp').write_text('int main() {}\n')
         (root / 'src/native.S').write_text('// SPDX-License-Identifier: MIT\n.text\n')
         (root / 'rust/lib.rs').write_text('pub fn main() {}\n')
@@ -59,7 +59,7 @@ class SourceReleaseTests(unittest.TestCase):
                 self.assertNotIn('.env', paths)
                 self.assertEqual(next(m for m in members if m.name.endswith('/scripts/tool.sh')).mode, 0o755)
                 for entry in manifest['files']:
-                    data = tar.extractfile('orbisfox-0.68-alpha-source/' + entry['path']).read()
+                    data = tar.extractfile('orbisfox-0.69-alpha-source/' + entry['path']).read()
                     self.assertEqual(hashlib.sha256(data).hexdigest(), entry['sha256'])
 
     def test_rejects_source_symlink_and_unreviewed_binary(self):

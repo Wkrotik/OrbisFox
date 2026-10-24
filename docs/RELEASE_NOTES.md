@@ -1,10 +1,10 @@
-# OrbisFox 0.68 Alpha 3 — prerelease candidate
+# OrbisFox 0.69 Alpha — native SDK prerelease candidate
 
 **Experimental PS4 browser. Not production-ready.**
 
-This is the pre-uBO baseline merged from `95137c3`. The package keeps internal
-version **00.68**. Publication requires a fresh matching package and verified
-native-SDK source/relink materials; check the GitHub prerelease for asset
+This is the pre-uBO baseline merged from `95137c3`, versioned as 0.69. The package
+uses internal version **00.69**. Publication requires a fresh matching package and
+verified native-SDK source/relink materials; check the GitHub prerelease for asset
 availability rather than treating these candidate notes as a download announcement.
 
 ## Changes

@@ -12,7 +12,7 @@ Keep these claims separate:
 
 Only level 4 proves a native path executed on a console; none of these alone is
 production certification. A passing synthetic clip is not a passing live player.
-The maintained implementation baseline is 0.68. `main` now includes pre-uBO
+The maintained implementation baseline is 0.69. `main` now includes pre-uBO
 checkpoint `95137c3` on ps4-homebrew-dev/sdk v0.2.1. Earlier ORBF00001/OpenOrbis
 results below remain historical evidence, not measurements of the new SDK.
 

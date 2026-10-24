@@ -152,7 +152,7 @@ def main(argv=None):
     if (additional_sfo_keys - allowed or (not native and additional_sfo_keys != allowed)):
         raise ValueError('Unexpected generated SFO metadata')
     required = {'TITLE': (identity['title']+'\0').encode(), 'TITLE_ID': (identity['title_id']+'\0').encode(),
-                'APP_VER': b'0.68\0', 'VERSION': b'0.68\0', 'CATEGORY': b'gd\0',
+                'APP_VER': b'0.69\0', 'VERSION': b'0.69\0', 'CATEGORY': b'gd\0',
                 'CONTENT_ID': (identity['content_id']+'\0').encode()}
     for name, value in required.items():
         if actual_sfo.get(name) != (0x204, value):

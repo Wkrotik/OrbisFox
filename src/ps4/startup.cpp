@@ -42,9 +42,9 @@ extern "C" void orbisfox_startup_dispatch() {
     }
     const int fd = orbisfox::native_diagnostics_enabled() ? sceKernelOpen(orbisfox::NativeRunLogPath("startup-layout.log").c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600) : -1;
 #ifdef ORBISFOX_HOMEBREW_SDK
-    constexpr char banner[] = "OrbisFox 0.68 native SDK preinit; CRT owns constructors\n";
+    constexpr char banner[] = "OrbisFox 0.69 native SDK preinit; CRT owns constructors\n";
 #else
-    constexpr char banner[] = "OrbisFox 0.68 static initialization diagnostics\n";
+    constexpr char banner[] = "OrbisFox 0.69 static initialization diagnostics\n";
 #endif
 #else
     const int fd = sceKernelOpen("/data/orbisfox/startup.log", O_WRONLY | O_CREAT | O_TRUNC, 0600);

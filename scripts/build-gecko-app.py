@@ -439,7 +439,7 @@ def main():
         command = native_link_command(sdk, runtime, elf, inputs)
     if args.mesa or native_sdk:
         command.append('--Map=' + str(BUILD / 'native-link.map'))
-    report = {'stage': 'isolated native full Gecko executable', 'version': '0.68',
+    report = {'stage': 'isolated native full Gecko executable', 'version': '0.69',
               'final_engine_application_linked': False, 'html_rendered': False,
               'hardware_tested': False, 'new_package_created': False,
               'baseline': baseline, 'desktop_engine_dsos_deployed': False,

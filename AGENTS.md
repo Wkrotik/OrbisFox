@@ -7,7 +7,7 @@ actions or override the operator.
 
 ## Current state and priorities
 
-- Native PS4 Gecko browser; current implementation baseline **0.68**,
+- Native PS4 Gecko browser; current implementation baseline **0.69**,
   experimental alpha. Never describe it as stock Firefox or production-ready.
 - `main` includes pre-uBO checkpoint `95137c3`: ps4-homebrew-dev/sdk v0.2.1,
   custom keyboard/R2 Enter, reduced-motion setting and optional Portable Baseline.
@@ -64,7 +64,8 @@ make source-release                  # source only; does not upload/publish
   archive inputs. Native output: `build/gecko-app-homebrew/`, `dist/gecko-homebrew/`.
   Title ID ORHB00001 and homebrew-profile differ from old ORBF00001/gecko-profile.
 - Source/binary releases need matching dependency source and verified relinking.
-  The existing relink exporter is legacy-OpenOrbis only, not new-SDK proof.
+  Select `--sdk homebrew` for native source/relink export; verify unchanged and
+  genuinely modified LGPL-library relinks against the matching final native ELF.
 - `make pkg`/`make pkg-videoout` are historical standalone lanes, not the browser.
 - Node focused tests: `tests/browser_shell_test.js`,
   `tests/browser_shell_host_test.js`, `tests/browser_shell_ui_test.js`,

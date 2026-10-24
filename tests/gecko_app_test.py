@@ -929,7 +929,7 @@ class GeckoAppTests(unittest.TestCase):
 
     def test_test_package_is_separate_and_does_not_claim_hardware_success(self):
         self.assertEqual(PACKAGE.DIST, ROOT / 'dist/gecko')
-        self.assertEqual(PACKAGE.VERSION, '0.68')
+        self.assertEqual(PACKAGE.VERSION, '0.69')
         script = (ROOT / 'scripts/package-gecko.py').read_text()
         self.assertIn("'hardware_tested': False", script)
         self.assertIn("'html_rendered_on_console': False", script)

@@ -130,7 +130,7 @@ class RunLogsTests(unittest.TestCase):
             self.assertEqual(len(runs), 2)
             for run in runs:
                 metadata = json.loads((run / 'run-meta.json').read_text())
-                self.assertEqual(metadata['version'], '0.68')
+                self.assertEqual(metadata['version'], '0.69')
                 self.assertEqual(metadata['category'], 'gd')
                 self.assertEqual(metadata['run_id'], run.name)
             self.assertEqual((data / 'run-id.txt').read_text().strip(), runs[-1].name)

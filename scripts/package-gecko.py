@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Produce OrbisFox 0.68 CPU affinity/fullscreen/website appearance candidate; preserve matched milestones."""
+"""Produce the OrbisFox 0.69 pre-uBO native SDK candidate; preserve matched milestones."""
 import argparse
 import hashlib
 import importlib.util
@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / 'build/gecko-app'
 ENGINE = ROOT / 'build/gecko-layout'
 DIST = ROOT / 'dist/gecko'
-VERSION = '0.68'
+VERSION = '0.69'
 # Public PS4 Param.sfo ATTRIBUTE bit5: common dialogs follow system assignment.
 # Leave the stable standalone package's attributes and console settings untouched.
 COMMON_DIALOG_ATTRIBUTE_SYSTEM = 0x20

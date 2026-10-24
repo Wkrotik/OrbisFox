@@ -56,7 +56,7 @@ Diagnostics run_platform_probes(bool videoout_only) {
     }
 #ifdef ORBISFOX_FULL_GECKO
     if(!native_diagnostics_enabled())d.storage="DIAGNOSTICS OFF";
-    log("OrbisFox 0.68 - diagnostic logging enabled");
+    log("OrbisFox 0.69 - diagnostic logging enabled");
 #else
     log("OrbisFox 0.11 engine bring-up - SpiderMonkey included; Gecko HTML layout NOT included");
 #endif
