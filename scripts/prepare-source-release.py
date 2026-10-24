@@ -5,14 +5,14 @@ import gzip
 import hashlib
 import io
 import json
-from pathlib import Path
 import tarfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ROOT_FILES = ('.gitignore', '.gitattributes', 'Makefile', 'LICENSE', 'README.md',
               'CONTRIBUTING.md', 'AGENTS.md', 'THIRD_PARTY.md')
 SOURCE_DIRS = ('assets', 'docs', 'gecko', 'include', 'rust', 'scripts', 'src', 'targets', 'tests', 'LICENSES')
-EXTENSIONS = {'.cpp', '.c', '.h', '.hpp', '.inc', '.idl', '.ipdl', '.ipdlh',
+EXTENSIONS = {'.cpp', '.c', '.h', '.hpp', '.S', '.inc', '.idl', '.ipdl', '.ipdlh',
               '.js', '.mjs', '.css', '.html', '.xhtml', '.json', '.toml', '.lock',
               '.py', '.sh', '.rs', '.ld', '.md', '.txt', '.jpg', '.jpeg', '.png',
               '.build', '.mozbuild', '.configure', '.conf'}

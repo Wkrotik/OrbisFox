@@ -31,10 +31,12 @@ scripts and prove producer idempotence. Direct edits to `.deps/` are temporary.
   now exists. `scripts/configure-gecko.py` builds missing private runtimes.
 - `build/gecko-layout/`: actual full engine, NSS/NSPR, layout, SWGL and media.
   Produced by `scripts/build-gecko-layout.py`; not a host Firefox executable.
-- `build/gecko-app/`, `dist/gecko/`: native ELF/conversion/package stage.
+- `build/gecko-app-homebrew/`, `dist/gecko-homebrew/`: current native-SDK
+  ELF/conversion/package stage. Select `--sdk homebrew`; the historical
+  OpenOrbis outputs remain `build/gecko-app/` and `dist/gecko/`.
   `scripts/build-gecko-app.py` folds actual engine/codec objects and checks the
   final native symbol closure, ABI bridges and source binding.
-- `build/media-codecs/{host,native}/`: isolated FFmpeg 9.0.2 static libraries.
+- `build/media-codecs/{host,native-homebrew,native}/`: isolated FFmpeg 9.0.2 static libraries.
   The host lane proves real decoder behavior under sanitizers; it is not linked
   into the PS4 executable. All defined native globals are namespaced to avoid
   collision with Gecko's retained FFVPX implementation.
@@ -42,10 +44,13 @@ scripts and prove producer idempotence. Direct edits to `.deps/` are temporary.
 - `dist/OrbisFox.pkg`: optional retained standalone baseline, never the current
   browser package. Fresh source checkouts need not include any old binary.
 
-The C frontend's FreeBSD target spelling is not proof of ABI compatibility.
-OpenOrbis has a musl-derived runtime, firmware-specific APIs and distinct clock,
-thread, allocator and file-descriptor contracts. Private libc++/Rust sysroots,
-SDK overlays and explicit final-ELF checks are intentional.
+The current lane uses ps4-homebrew-dev/sdk v0.2.1, a real system-libc CRT and
+separate C++/Rust runtimes. The legacy OpenOrbis lane uses musl; do not combine
+its CRT, headers or archives with native-SDK engine objects. The C frontend's
+FreeBSD target spelling is not ABI proof. Clock, thread, allocator and file-
+descriptor contracts need explicit adapters and actual final-ELF checks. Retained
+OpenOrbis service declarations/stb/linker provenance are documented separately
+in `THIRD_PARTY.md`; their presence does not mean the old libc is linked.
 
 ## Main thread vs native worker
 
@@ -60,7 +65,7 @@ and bounded commands—not live Gecko objects or font handles.
 writer/mailbox/reader slots; pixel copying and scanout happen outside the small
 swap lock. The worker is joined before shared resources are released. Native
 IME, retained for later repair, temporarily pauses scanout and requires fresh
-input before opening. The dev browser now defaults to a main-thread custom
+input before opening. The merged browser defaults to a main-thread custom
 keyboard, using real Gecko field editors with validated page ownership. It
 masks passwords and blocks pointer/native chrome through button release on
 close. R2 is Enter while typing; it must not leak into Forward after closing.
@@ -71,11 +76,13 @@ make an action appear immediate. Proper process/thread isolation is future work.
 
 ## Memory and native runtime
 
-The genuine SDK allocator remains the owner. Recursive locking and a bounded
-realloc-copy correction preserve its semantics. Only tracked SDK anonymous
-whole maps and separately owned GC arena/nursery chunks use cached game direct
-memory (**WB_ONION, type 0**). Global mmap, file mappings, stacks, JIT pages and
-partial shrinking allocations do not share that shortcut.
+The native-SDK lane retains the real system-libc allocator and uses its separate
+tracked direct-memory adaptations; it must not inherit the OpenOrbis allocator
+interposition. The legacy lane retains recursive locking and bounded realloc-
+copy handling. Only exact owned anonymous mappings and GC arena/nursery chunks
+use cached game direct memory (**WB_ONION, type 0**). Global mmap, file mappings,
+stacks, JIT pages and partial shrinking allocations do not share that shortcut.
+See `docs/HOMEBREW_SDK.md` for the native runtime and memory boundaries.
 
 Native clock translation is necessary: the SDK and firmware clock identifiers
 are not interchangeable. Process uptime must be real and advancing. The 0.68
@@ -90,6 +97,9 @@ and W^X transitions. Native startup attempts an actual own-code execution gate
 before `JS_Init`. Tested firmware denies shared-code creation with EPERM; the
 backend is disabled honestly. Baseline/RegExp may only use a proven native gate;
 Ion and WebAssembly are not enabled. A Linux memfd test cannot change this fact.
+The opt-in `--portable-baseline` path interprets CacheIR without native code;
+console entry was observed, not an overall responsiveness improvement. This is
+not Baseline JIT and does not bypass the native executable-memory gate.
 
 Software WebRender/SWGL rasterizes on the CPU. VideoOut scanout is not accelerated
 page rendering. The historical Piglet presenter/sample is not a supported GPU
@@ -128,6 +138,7 @@ list, not Places or deletion of cookies/cache. Avoid roots retaining old documen
 Website color scheme uses Gecko's content-only preference; fullscreen uses real
 trusted content/focus/permissions, not a CSS simulation or permission bypass.
 
+This pre-uBO baseline has no supported extension platform or bundled ad blocker.
 Chrome has a system principal; web content must never receive its bridge or
 objects. Keep same-origin image policy, referrers, permissions, trusted controller
 input and bounded link-opening behavior. Current in-process browsing lacks a

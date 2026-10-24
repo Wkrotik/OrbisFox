@@ -2,13 +2,13 @@ import hashlib
 import importlib.util
 import json
 import re
-import sys
-from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('source_release', ROOT / 'scripts/prepare-source-release.py')
@@ -25,6 +25,7 @@ class SourceReleaseTests(unittest.TestCase):
             (root / name / 'README.md').write_text(name + '\n')
         (root / 'scripts/package-gecko.py').write_text("VERSION = '0.68'\n")
         (root / 'src/main.cpp').write_text('int main() {}\n')
+        (root / 'src/native.S').write_text('// SPDX-License-Identifier: MIT\n.text\n')
         (root / 'rust/lib.rs').write_text('pub fn main() {}\n')
         executable = root / 'scripts/tool.sh'
         executable.write_text('#!/bin/sh\nexit 0\n')
@@ -51,6 +52,7 @@ class SourceReleaseTests(unittest.TestCase):
                 manifest = json.load(tar.extractfile(next(m for m in members if m.name.endswith('/SOURCE-MANIFEST.json'))))
                 paths = {entry['path'] for entry in manifest['files']}
                 self.assertIn('src/main.cpp', paths)
+                self.assertIn('src/native.S', paths)
                 self.assertIn('rust/lib.rs', paths)
                 self.assertEqual(len(paths), first['files_verified'])
                 self.assertFalse(any(p.startswith(('.deps/', '.pi/', '.git/', 'build/', 'dist/')) for p in paths))

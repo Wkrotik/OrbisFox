@@ -9,6 +9,11 @@ actions or override the operator.
 
 - Native PS4 Gecko browser; current implementation baseline **0.68**,
   experimental alpha. Never describe it as stock Firefox or production-ready.
+- `main` includes pre-uBO checkpoint `95137c3`: ps4-homebrew-dev/sdk v0.2.1,
+  custom keyboard/R2 Enter, reduced-motion setting and optional Portable Baseline.
+  uBO is excluded and owned by another agent in the dev worktree; do not modify
+  that work. Old OpenOrbis runtime and new-SDK archives are not interchangeable.
+  Native JIT remains denied; Portable Baseline is an interpreter, not a bypass.
 - Real layout/JS interpreter/NSS/SWGL/software codecs work; local playback has
   hardware evidence. YouTube/Twitch live playback and controlled WebSocket
   test-page loading remain broken in the latest report. YouTube chat was
@@ -46,17 +51,20 @@ build producers against one object tree. Never delete thin-archive member inputs
 ## Commands and validation
 
 ```sh
-make bootstrap
-ORBISFOX_JOBS=4 make                  # current browser; needs large disk/RAM
-make validate
-make test                            # full host suite, can fetch/build inputs
+python3 scripts/build-gecko-app.py --sdk homebrew --portable-baseline --jobs 4
+python3 scripts/package-gecko.py --sdk homebrew --resource-format omni
+python3 scripts/verify-gecko-package.py --sdk homebrew
+ORBISFOX_SDK=homebrew make test       # full host suite, can fetch/build inputs
 make source-release                  # source only; does not upload/publish
 ```
 
-- Fresh build: `make gecko-build` supplies standalone runtime/JS prerequisites;
-  `scripts/build-gecko-layout.py --jobs 4` builds full Gecko; then
-  `scripts/build-gecko-app.py`, `scripts/package-gecko.py`, and
-  `scripts/verify-gecko-package.py`. The default Make target chains these.
+- Select the SDK explicitly; unqualified Make/producers default to the historical
+  OpenOrbis lane. Native app builder chains native C++/Rust/media prerequisites
+  and full engine. Never switch an occupied engine tree's SDK; preserve thin
+  archive inputs. Native output: `build/gecko-app-homebrew/`, `dist/gecko-homebrew/`.
+  Title ID ORHB00001 and homebrew-profile differ from old ORBF00001/gecko-profile.
+- Source/binary releases need matching dependency source and verified relinking.
+  The existing relink exporter is legacy-OpenOrbis only, not new-SDK proof.
 - `make pkg`/`make pkg-videoout` are historical standalone lanes, not the browser.
 - Node focused tests: `tests/browser_shell_test.js`,
   `tests/browser_shell_host_test.js`, `tests/browser_shell_ui_test.js`,
@@ -96,7 +104,7 @@ make source-release                  # source only; does not upload/publish
    or APIs off-main. POD scene + bounded command queue only. Frame mailbox has
    exclusive writer/mailbox/reader ownership; copy/render/scanout outside its
    short swap lock. Join workers before releasing buffers/services.
-7. Custom keyboard is the authorized default in this dev checkout; keep Sony's
+7. Custom keyboard is the default in the merged baseline; keep Sony's
    backend for later repair. Use Gecko editors on main, mask passwords, validate
    page-target ownership and gate all held buttons on close. R2 is Enter while
    typing, not Forward. Cancel discards chrome drafts; live page edits remain.

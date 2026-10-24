@@ -2,7 +2,7 @@
 
 Original OrbisFox material is MIT **with the exceptions in
 [LICENSES/README.md](LICENSES/README.md)**. Dependencies are not relicensed by
-that grant. OrbisFox is not affiliated with Mozilla, Sony or OpenOrbis and
+that grant. OrbisFox is not affiliated with Mozilla, Sony, ps4-homebrew-dev or OpenOrbis and
 ships no Firefox artwork, proprietary SDK, firmware modules or shader binaries.
 
 ## Pinned components
@@ -10,8 +10,8 @@ ships no Firefox artwork, proprietary SDK, firmware modules or shader binaries.
 | Component | Source / pin | License and role |
 | --- | --- | --- |
 | Gecko, SpiderMonkey, SWGL, NSPR, NSS and bundled libraries | [Mozilla Firefox](https://github.com/mozilla-firefox/firefox), commit `83cebcf5a522bf49667fd07084f04e8497de0eba` | MPL-2.0 and component-specific licenses. Actual native engine, layout, JS, rasterization, TLS and networking. `gecko/` contains the maintained overlay, not the entire upstream tree. |
-| OpenOrbis PS4 Toolchain | [OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), v0.5.3, tag commit `6929bafac0b565692ed61e66032a79185ee9cf65` | Repository GPL v3; individual runtime/header components retain their own terms. SDK stubs/runtime and host conversion tools. |
-| Native homebrew SDK (in-progress `dev` conversion) | [ps4-homebrew-dev/sdk](https://github.com/ps4-homebrew-dev/sdk), v0.2.1 / `ecc8347aa20d7b3423405a5e94d7ab119485160d` | GPL-3.0-or-later startup/runtime supplements and file-specific historical BSD headers; real system libc imports, not the old musl runtime. See `docs/HOMEBREW_SDK.md`; no complete native browser or redistribution sign-off yet. |
+| Current browser SDK | [ps4-homebrew-dev/sdk](https://github.com/ps4-homebrew-dev/sdk), v0.2.1 / `ecc8347aa20d7b3423405a5e94d7ab119485160d` | GPL-3.0-or-later startup/runtime supplements and file-specific historical BSD headers; native CRT, system libc/service imports and conversion/package tools. See `docs/HOMEBREW_SDK.md`. Complete corresponding-source/relink materials remain a binary-release gate. |
+| OpenOrbis PS4 Toolchain (retained inputs and legacy lane) | [OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), v0.5.3, tag commit `6929bafac0b565692ed61e66032a79185ee9cf65` | Repository GPL v3 and per-file terms. Current native SDK lane retains service declarations, stb and independent package extraction tooling; no OpenOrbis musl CRT/libc linked into that lane. The old build still uses its runtime/stubs/tools. |
 | C++ runtimes | [LLVM](https://github.com/llvm/llvm-project), `2078da43e25a4623cab2d0d60decddf709aaea28` / llvmorg-21.1.8 | Apache-2.0 WITH LLVM-exception, including retained older notices; libc++, libc++abi, libunwind. Built privately with Orbis adaptations. |
 | Rust standard library | Rust 1.99.0, source archive SHA-256 `3f1f9b7ed48f4596fc87889b7b3c61747336a55c9c22db1ab0c697e0aadb77aa` | MIT / Apache-2.0 and component notices. Private target/sysroot, not a stock FreeBSD runtime. Rust `libc` and other crates keep their own licenses. |
 | Added software codecs | [FFmpeg](https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz), 9.0.2; SHA-256 `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e` | LGPL-2.1-or-later configuration; GPL/nonfree/version3/network disabled. Real decoder/util/resampler archives, all defined symbols prefixed `orbis_media_`. |
@@ -21,14 +21,22 @@ ships no Firefox artwork, proprietary SDK, firmware modules or shader binaries.
 | Noto Sans, Symbols 2, Math | [noto-fonts](https://github.com/notofonts/noto-fonts), `ffebf8c1ee449e544955a7e813c54f9b73848eac` | SIL OFL 1.1. Downloaded and hash-checked by `scripts/fetch-layout-assets.py`. |
 | Noto Color Emoji | [noto-emoji](https://github.com/googlefonts/noto-emoji), `e20cbc2bbec1926686be9f9bee7d1d2cfa1fea0e` | SIL OFL 1.1, including reserved-font-name terms. |
 
-The SDK asset is `toolchain-llvm-18.2.zip`, SHA-256
+Current SDK asset: `ps4-homebrew-sdk.zip`, 4,471,594 bytes, SHA-256
+`fc021d7e6d53dcd1c73c87af4e0897012c62ffa5276289c0c3d898d71be80310`.
+The historical OpenOrbis asset is `toolchain-llvm-18.2.zip`, SHA-256
 `5006bb8629a40093b712fac971456fa4d5ad3fafaadb16d11c10b8a93b8b496f`.
 Pin definitions and hashes in the producer scripts are authoritative.
 
+Acknowledgements: **ps4-homebrew-dev/sdk contributors** for the current browser
+SDK, native startup/runtime supplements and public service bindings. Mozilla,
+LLVM, Rust, FFmpeg, OpenOrbis, font and other contributors retain the credits and
+licenses below; the SDK migration is not a relicensing of their work.
+
 ## Default-off experimental Mesa dependencies
 
-The `dev` branch adds the following public dependencies
-only for explicit `--mesa` builds; the normal software build does not link them.
+The following retained dependencies are used only for explicit legacy `--mesa`
+builds; the current native-SDK software browser does not link them. Native-SDK
+Mesa dependency migration is incomplete and mixed-SDK builds are rejected.
 
 | Component | Source / pin | License and role |
 | --- | --- | --- |
@@ -45,7 +53,7 @@ browser's corresponding-source/relink or public redistribution checklist.
 
 ## OpenOrbis-derived material
 
-The native-SDK conversion's separate service-declaration bundle retains 21 public
+The current native-SDK lane's separate service-declaration bundle retains 21 public
 headers from the OpenOrbis pin above, with exact Git blob checks, original notices
 and the upstream GPL-v3 LICENSE. It supplies only PS4 service declarations, not old
 libc/POSIX headers, CRT or libraries; root MIT does not relicense these headers.
@@ -61,7 +69,7 @@ Acknowledgements: OpenOrbis contributors; Specter; orbisdev and flat_z for
 Piglet reverse engineering; Nikita Krapivin for the Piglet example.
 No upstream artwork is reused.
 
-The SDK runtime includes the [OpenOrbis musl fork](https://github.com/OpenOrbis/musl)
+The **legacy OpenOrbis** runtime includes the [OpenOrbis musl fork](https://github.com/OpenOrbis/musl)
 and associated runtime/stub components. musl's MIT and other retained notices
 must accompany distribution where applicable. `assets/licenses/musl-COPYRIGHT.txt`
 preserves the fork's notice inventory from commit

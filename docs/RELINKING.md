@@ -1,5 +1,23 @@
 # Binary source and static-library relinking
 
+## Scope: verified exporter is legacy OpenOrbis only
+
+The instructions below describe the existing **ORBF00001/OpenOrbis** object-only
+kit. `main` now also contains the native **ps4-homebrew-dev/sdk v0.2.1** browser
+(ORHB00001); this exporter is **not yet a verified relinking route for it**.
+Do not use an old kit to satisfy a new-SDK binary release. The native application
+uses a different CRT, system libc imports and isolated C++/Rust runtimes; the
+musl allocator object and old linker command are not interchangeable with them.
+
+Before publishing a native-SDK package, export its exact application/codec
+objects, dependency source/configuration/notices and native linker inputs, then
+successfully relink both unchanged and modified LGPL library inputs. Preserve
+the exact ELF/source binding and keep proprietary firmware libraries out. Until
+that route passes, the new binary release remains blocked; source publication
+alone does not remove this requirement.
+
+## Existing OpenOrbis release route
+
 Tester releases should offer the installable `OrbisFox.pkg` first. Source and
 relinking downloads accompany it for contributors and redistribution obligations;
 they are not substitutes for the installer. Always use the materials attached to

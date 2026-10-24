@@ -19,8 +19,8 @@ The following exceptions take precedence over the root license:
 | --- | --- |
 | `gecko/**`, except the ANGLE file below | MPL-2.0; preserve existing headers and upstream notices, including for files without individual headers. |
 | `gecko/third_party/angle/src/common/system_utils_orbis.cpp` | ANGLE BSD-3-Clause; `ANGLE-BSD-3-Clause.txt`. |
-| `scripts/patch-gecko.py`, `scripts/patch-gecko-layout.py` | MPL-2.0; these contain modifications/excerpts of Mozilla source. |
-| `scripts/build-libcxx.py` | Apache-2.0 WITH LLVM-exception; includes LLVM source modifications. |
+| `scripts/patch-gecko.py`, `scripts/patch-gecko-layout.py`, `scripts/patch-gecko-homebrew.py` | MPL-2.0; these contain modifications/excerpts of Mozilla source. |
+| `scripts/build-libcxx.py`, `scripts/build-homebrew-libcxx.py` | Apache-2.0 WITH LLVM-exception; includes LLVM source modifications. |
 | `scripts/build-homebrew-sdk-probe.py` | GPL-3.0-or-later; uses the project's GPL packaging verification helpers. The separate SDK's own startup/runtime licenses also apply to its probe binary. |
 | `scripts/ps4.ld`, `scripts/ps4-gecko.ld` | GPL-3.0-only; adapted from OpenOrbis's GPL-v3 linker script. |
 | `src/ps4/piglet.cpp`, `src/ps4/videoout.cpp`, `scripts/package.py` | Retained under GPL-3.0-or-later conservatively because of the documented OpenOrbis sample adaptations. Do not claim these were relicensed to MIT. |
@@ -47,6 +47,24 @@ This policy is not a claim that every component has been relicensed to GPL or
 that a complete binary redistribution audit has passed. A fully permissive
 combined release would require resolving/removing the remaining copyleft
 components through lawful replacements or permission from their authors.
+
+## Current SDK and retained provenance
+
+The merged browser baseline uses **ps4-homebrew-dev/sdk v0.2.1**, commit
+`ecc8347aa20d7b3423405a5e94d7ab119485160d`, not the old OpenOrbis musl
+runtime. Its GPL-3.0-or-later startup/runtime supplements and per-file BSD/header
+notices must accompany the matching source/build materials. The runtime imports
+real firmware services; proprietary firmware binaries are not distributed.
+
+OpenOrbis-derived linker scripts, service declarations, sample-derived native
+code, stb and host-tool notices remain applicable where used. Thanking the new
+SDK's contributors does not remove those authors' rights or the existing license
+exceptions. See `../THIRD_PARTY.md` for the separate roles and exact pins.
+
+The existing verified object-only relink exporter targets the legacy OpenOrbis
+lane. It must not be advertised as a tested new-SDK relink kit. A new-SDK binary
+release remains blocked until matching corresponding-source and a usable,
+verified relinking route are supplied; publishing a package alone is insufficient.
 
 ## Before distributing binaries
 

@@ -1,5 +1,20 @@
 # Alpha release checklist
 
+## Current native-SDK baseline
+
+`main` includes pre-uBO checkpoint `95137c3`, ps4-homebrew-dev/sdk v0.2.1,
+and the custom keyboard. Keep any release **pre-release / experimental**.
+Select `--sdk homebrew` for build/package/verification and record title ID
+**ORHB00001**, its separate homebrew profile, and the exact final source commit.
+There is no uBO implementation in this baseline. The unqualified build and
+existing relink exporter still target the historical OpenOrbis lane.
+
+**Publication remains blocked** until a fresh matching native-SDK package and
+complete source/relink artifacts pass the gates below. A retained developer
+package or a legacy relink kit must not be relabeled as this release. A draft
+changelog is in [RELEASE_NOTES.md](RELEASE_NOTES.md); it is not a published release
+or evidence that these gates passed.
+
 ## Release artifacts
 
 A tester release must offer an **installable PS4 `.pkg`**, clearly marked
@@ -62,7 +77,8 @@ possible secret. Human review is still required.
 - [ ] Review distribution rights/patents/trademarks for target jurisdictions.
   See `LICENSES/README.md` and `THIRD_PARTY.md`.
 - [ ] Record actual console launch/exit, repeated navigation, settings persistence,
-  IME, fullscreen/color preference, memory pressure and controlled playback.
+  custom keyboard/R2 Enter, fullscreen/color preference, memory pressure and
+  controlled playback. Sony's retained native IME is not the default.
   For an experimental tester build, explicitly identify untested paths and
   retained baseline evidence rather than inventing a fresh console pass.
 - [ ] Record current failed streaming/WebSocket tests honestly. If distributing

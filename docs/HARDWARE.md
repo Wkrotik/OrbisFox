@@ -12,7 +12,9 @@ Keep these claims separate:
 
 Only level 4 proves a native path executed on a console; none of these alone is
 production certification. A passing synthetic clip is not a passing live player.
-The currently maintained implementation baseline is 0.68.
+The maintained implementation baseline is 0.68. `main` now includes pre-uBO
+checkpoint `95137c3` on ps4-homebrew-dev/sdk v0.2.1. Earlier ORBF00001/OpenOrbis
+results below remain historical evidence, not measurements of the new SDK.
 
 ## Current observations
 
@@ -31,11 +33,15 @@ The currently maintained implementation baseline is 0.68.
   allocation among JS/layout/render/decode exists yet.
 - 0.68 includes fullscreen, content color-scheme and CPU-affinity-count changes.
   They require broader console validation; do not claim they solved live playback.
-- The SDK dev browser's custom keyboard/R2 Enter path has host regression tests,
-  not console evidence. Verify layout, field focus, form submit/keydown cancel,
-  multiline newlines, password masking, confirm/close behavior and held-button
-  release gating with a fresh hash-bound native-SDK package. The protected main
-  browser and the standalone SDK Dialog Probe are different test targets.
+- Native-SDK browsing sessions and genuine Portable Baseline entry were observed;
+  O2/Portable Baseline did not establish an overall responsiveness improvement.
+  Multi-second stalls and CE-34878-0 crashes remain; see `HOMEBREW_SDK.md`.
+- The merged custom keyboard/R2 Enter path has focused host regressions. Broader
+  hardware coverage of focus, canceled keydown, multiline newlines, passwords and
+  held-button release is still required. The SDK browser (ORHB00001), legacy
+  browser (ORBF00001) and standalone SDK Dialog Probe are different test targets.
+- uBO experiments are excluded from this merged checkpoint. Do not attribute
+  their blank-popup/navigation failures to the pre-uBO package.
 
 Early bring-up was reported on firmware 11.00 / GoldHEN v2.4b18.12. Do not
 infer that all later runs or every console model share that environment. Ask
@@ -54,7 +60,7 @@ for exact model, firmware and homebrew version with each new report.
 5. Disable diagnostics after acquisition. Review/redact evidence before sharing.
 
 ```sh
-python3 scripts/deploy-console.py --host <console-IP> --port 2121
+python3 scripts/deploy-console.py --sdk homebrew --host <console-IP> --port 2121
 python3 scripts/fetch-console-crash.py --host <console-IP> --port 2121 \
   --version <version> --logs-only --out build/hardware-<version>/reproduction
 ```
@@ -72,12 +78,13 @@ locally under ignored `build/project-history/` and hardware archive directories.
 
 ## Opt-in resource packaging trial
 
-The default package remains unpacked. A packaging-only candidate can use Gecko's
+The unqualified package default remains unpacked; the recommended SDK commands
+explicitly select `omni`. A packaging-only candidate can use Gecko's
 existing `omni.ja` loader instead of thousands of separate resource files:
 
 ```sh
-python3 scripts/package-gecko.py --resource-format omni
-python3 scripts/verify-gecko-package.py
+python3 scripts/package-gecko.py --sdk homebrew --resource-format omni
+python3 scripts/verify-gecko-package.py --sdk homebrew
 ```
 
 Build/verify the native application first, including any local native changes.

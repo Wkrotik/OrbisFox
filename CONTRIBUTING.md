@@ -21,27 +21,37 @@ Do not use `make clean` as routine troubleshooting: existing developer trees
 contain rollback packages, active thin-archive inputs and irreplaceable evidence.
 
 ```sh
-make bootstrap                       # public, hash-pinned OpenOrbis v0.5.3
-ORBISFOX_JOBS=4 make                  # complete browser pipeline
-make validate
-make test
+python3 scripts/build-gecko-app.py --sdk homebrew --portable-baseline --jobs 4
+python3 scripts/package-gecko.py --sdk homebrew --resource-format omni
+python3 scripts/verify-gecko-package.py --sdk homebrew
+ORBISFOX_SDK=homebrew make test
 ```
 
-The default pipeline builds the standalone runtime/SpiderMonkey prerequisites
-before the full engine. This is intentional: several regression and embedding
-inputs still live in `build/gecko-spidermonkey/`. `make pkg` is the historical
-standalone application, **not** the browser. A missing historical
-`dist/OrbisFox.pkg` is acceptable on a fresh checkout; an existing one is protected.
+The current browser uses pinned **ps4-homebrew-dev/sdk v0.2.1**, isolated native
+C++/Rust runtimes and real console libc imports. Pass `--sdk homebrew` explicitly:
+unqualified `make`/producers still default to the historical OpenOrbis lane. Never
+switch an existing engine object tree's SDK or mix its thin archives/runtimes.
+The producers build the selected prerequisites before the full engine. Omit
+`--portable-baseline` to use the generic interpreter; neither interpreter enables
+native JIT. Some tests still use the standalone `build/gecko-spidermonkey/` lane.
+`make pkg` is the historical standalone app, **not** the browser. A missing
+historical `dist/OrbisFox.pkg` is acceptable; an existing one is protected.
 
 Useful focused stages after initial setup:
 
 ```sh
-make gecko-build                     # runtime/standalone SpiderMonkey lane
-python3 scripts/build-gecko-layout.py --jobs 4
-python3 scripts/build-gecko-app.py
-python3 scripts/package-gecko.py
-python3 scripts/verify-gecko-package.py
+python3 scripts/build-gecko-layout.py --sdk homebrew --portable-baseline --jobs 4
+python3 scripts/build-gecko-app.py --sdk homebrew --portable-baseline --skip-engine-build --jobs 4
+python3 scripts/package-gecko.py --sdk homebrew --resource-format omni
+python3 scripts/verify-gecko-package.py --sdk homebrew
 ```
+
+Current outputs are `build/gecko-app-homebrew/` and `dist/gecko-homebrew/`;
+ORHB00001 uses a separate `/data/orbisfox/homebrew-profile`. See
+[the SDK guide](docs/HOMEBREW_SDK.md) for dependency pins and historical evidence.
+OpenOrbis-derived service headers, code and host tooling retain their credits and
+licenses; switching SDK does not remove those obligations. uBO is not in this
+merged baseline.
 
 The full engine builder has a separate `--jobs` setting (default four).
 `ORBISFOX_JOBS` controls the standalone build. Avoid launching two producers

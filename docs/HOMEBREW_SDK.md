@@ -1,12 +1,22 @@
-# New SDK runtime evaluation (`dev`)
+# Native homebrew SDK browser
 
-The operator has authorized an in-place SDK conversion in the existing `dev`
-checkout. Conversion is **in progress**, not a working native-SDK browser release.
-The standalone C probe passed on console, including the revised return-Home path;
-this does not prove that the browser's C++ shutdown or Mesa crash is fixed. The
-working browser checkout remains untouched. No third browser tree is used, no JIT
-work is included, and retained rollback/crash artifacts and thin archive inputs
-must not be deleted to make room without approval.
+`main` now contains the pre-uBO SDK browser checkpoint **`95137c3`**. It uses
+**ps4-homebrew-dev/sdk v0.2.1**, isolated C++/Rust runtimes, SWGL and the custom
+controller keyboard. Browsing and genuine Portable Baseline entry have console
+evidence, but long stalls and crashes remain. No overall performance improvement,
+Mesa fix, native JIT, uBO support or production readiness is claimed.
+
+Use `--sdk homebrew` explicitly; the unqualified producers still default to the
+legacy OpenOrbis lane. The package is **OrbisFox SDK Test**, `ORHB00001`, using
+`/data/orbisfox/homebrew-profile` separately from the old browser. No automatic
+profile migration is performed. The build/pins below and README document the
+current lane. Public binary publication additionally needs matching source and
+a verified native-SDK relinking route; the legacy relink kit is not equivalent.
+
+The detailed probe, migration and failure analyses below are **retained history**,
+not a statement that the current browser is stuck at the early probe gates.
+Sibling-checkout references describe the original investigation. Keep retained
+rollback/crash artifacts and active thin-archive inputs intact.
 
 ## Pinned inputs
 
@@ -101,12 +111,12 @@ prove that the browser's later lifecycle is correct. Host firmware doubles cover
 success, the observed `0x80b8000e`, failed bindings/flags, timeouts, clock failure,
 result/cancel handling and cleanup; only console execution tests the real service.
 
-### Custom keyboard (SDK dev browser)
+### Custom keyboard (merged browser baseline)
 
-The operator selected a custom chrome keyboard as the browser default, leaving
-Sony's native backend intact for later repair. The protected `orbisfox/` main
-checkout is not part of this change. SDK selection, package identity/profile,
-allocator and shutdown paths are unchanged; continue to select the native SDK
+The custom chrome keyboard is the browser default, leaving Sony's native backend
+intact for later repair. This pre-uBO implementation is now included in `main`.
+SDK selection, package identity/profile, allocator and shutdown paths are
+unchanged; continue to select the native SDK
 explicitly with `ORBISFOX_SDK=homebrew` / `--sdk homebrew`.
 
 D-pad chooses keys, Cross types, Triangle inserts space, Square deletes (held
@@ -383,10 +393,10 @@ A separate native SWGL application-link lane is implemented with SDK-bound
 runtimes, genuine CRT ownership and final-ELF checks. The complete native engine
 and browser executable now pass their strict links and final application audits.
 The native software-rendered SELF/PKG lane also passes local production and
-independent payload/resource extraction checks. This is still host build evidence:
-console startup, rendering, networking and C++ shutdown remain unvalidated.
-No console-validated native-SDK browser installer or redistribution signoff is
-claimed.
+independent payload/resource extraction checks. Subsequent console sessions
+reached real browsing and portable-interpreter entry, as recorded above. This
+does not establish broad compatibility, crash-free C++ shutdown or redistribution
+signoff. Host/link/package evidence remains separate from console execution.
 
 Prerequisites and bounded source/configuration checks:
 
@@ -687,11 +697,16 @@ Protocol-number lookups query the SDK's real named records and verify their
 returned number, under the existing NSPR lock. No public libc API is fabricated.
 
 This does **not** restore native AAAA/IPv6 hostname resolution. Resolver coverage
-is an explicit remaining migration gate, not equivalent networking to the working
-browser. NSS certificate/hostname checks must remain intact regardless of which
+remains limited; successful IPv4 browsing is not proof of IPv6 or complete
+network compatibility. NSS certificate/hostname checks must remain intact regardless of which
 resolver supplies an address.
 
-## Evidence and remaining gates
+## Retained early-migration evidence and remaining gates
+
+The following records the early shared-memory bring-up before successful browser
+sessions. Its then-pending startup gates are historical; the first sections and
+subsequent stall/portable-interpreter observations describe the merged baseline.
+Crashes, resolver limitations and binary redistribution requirements remain open.
 
 Host ASan/UBSan execution checks logic on the host, not the SDK's native runtime.
 Native linking is not SELF/package verification or console execution. Complete
